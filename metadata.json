@@ -1,0 +1,5 @@
+{
+  "name": "Generador de Sesiones de Aprendizaje",
+  "description": "Herramienta profesional para docentes que genera sesiones de aprendizaje completas basadas en el CNEB, con IA y exportación a Word.",
+  "requestFramePermissions": []
+}
