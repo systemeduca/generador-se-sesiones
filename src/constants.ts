@@ -167,3 +167,30 @@ export const INSTRUMENTOS_EVALUACION = [
   "Cuaderno de campo",
   "Portafolio"
 ];
+
+export const OPCIONES_INCLUSION_2026 = [
+  "Ninguno",
+  "Inclusión y participación activa",
+  "Atención a la diversidad",
+  "Ambos"
+];
+
+export const OPCIONES_RECURSOS_2026 = [
+  "Ninguno",
+  "Material concreto y manipulativos del área",
+  "Recursos digitales (videos, apps, páginas web)",
+  "Textos y bibliografía recomendada",
+  "Fotocopias, fichas y materiales impresos",
+  "Recursos del entorno (materiales reciclados, local)",
+  "Escribir o redactar (personalizado)"
+];
+
+export const OPCIONES_DIVERSIDAD_2026 = [
+  "Ninguno",
+  "Atención a NEE (necesidades educativas especiales)",
+  "Ritmos de aprendizaje diversos",
+  "Contexto cultural y plurilingüe",
+  "Adaptaciones para estudiantes con barreras",
+  "Agrupaciones flexibles",
+  "Escribir o redactar (personalizado)"
+];
