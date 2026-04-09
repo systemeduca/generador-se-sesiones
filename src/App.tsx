@@ -87,7 +87,7 @@ interface SessionData {
   transversalCompetencies: string[];
   transversalApproaches: string[];
   specialNeeds: SpecialNeedStudent[];
-  generateTheory: boolean;
+  generateActivities: boolean;
   generateApplication: boolean;
   templateFile?: {
     data: string;
@@ -134,7 +134,7 @@ export default function App() {
     transversalCompetencies: [],
     transversalApproaches: [],
     specialNeeds: [],
-    generateTheory: true,
+    generateActivities: true,
     generateApplication: true,
     unitPurpose: '',
     inclusion2026: 'Ninguno',
@@ -578,7 +578,8 @@ export default function App() {
               "competency": "Nombre de la competencia transversal",
               "capacities": ["Capacidad 1", "Capacidad 2"],
               "criteria": ["Criterio 1", "Criterio 2"],
-              "instruments": ["Lista de cotejo"]
+              "instruments": ["Lista de cotejo"],
+              "evidence": "Descripción detallada de la evidencia transversal"
             }
           ],
           "transversalApproaches": [
@@ -604,13 +605,45 @@ export default function App() {
           "feedback": [
             { "type": "Reflexiva", "description": "Descripción", "when": "Cuándo se aplica" }
           ],
-          "theory": "Contenido teórico resumido del tema",
-          "applicationSheet": [
-            { "question": "Pregunta 1", "options": ["a", "b", "c", "d"], "answer": "a" }
-          ],
+          "learningGuide": {
+            "title": "Título de la Guía de Aprendizaje",
+            "introduction": "Breve introducción motivadora",
+            "steps": [
+              {
+                "stepNumber": 1,
+                "title": "Nombre del paso/actividad",
+                "didacticProcess": "Proceso didáctico de la competencia al que corresponde",
+                "instructions": "Instrucciones claras y precisas para el estudiante",
+                "detailedActivity": "Desarrollo paso a paso de lo que el estudiante debe hacer",
+                "resources": "Materiales necesarios para este paso"
+              }
+            ],
+            "finalProduct": "Descripción del producto o evidencia de aprendizaje final"
+          },
+          "applicationSheet": {
+            "title": "Título de la Ficha de Aplicación",
+            "contextualizedSituation": "Situación problemática basada en el contexto del estudiante para aplicar lo aprendido",
+            "activities": [
+              {
+                "title": "Nombre del ejercicio/reto",
+                "instructions": "Instrucciones claras y precisas para el estudiante",
+                "content": "Desarrollo detallado del ejercicio o reto propuesto",
+                "alignment": "Criterio de evaluación con el que se relaciona directamente"
+              }
+            ],
+            "selfEvaluation": [
+              { "criterion": "Criterio de evaluación", "indicator": "Lo logré / Estoy en proceso" }
+            ]
+          },
           "customData": {} 
         }
         Asegúrate de que el contenido sea pedagógicamente sólido y adaptado al grado.
+        IMPORTANTE (Lineamientos MINEDU):
+        1. La **Evidencia de Aprendizaje** debe ser el resultado directo del **Propósito de Aprendizaje** establecido. Debe demostrar claramente el logro de las **Competencias y Capacidades priorizadas**.
+        2. Para las **Competencias Transversales** (especialmente la Competencia 28: "Se desenvuelve en entornos virtuales..."), la evidencia NO debe ser genérica. Debe describir claramente cómo los recursos tecnológicos o programas seleccionados contribuyen a obtener la evidencia de aprendizaje que se integra con la competencia del área, detallando el uso pedagógico de la tecnología.
+        3. Las actividades y la evidencia deben integrar y reflejar el uso de los **Recursos y Materiales Educativos** seleccionados.
+        4. Si se solicita la "Guía de Actividades de aprendizaje", esta debe ser MUY ROBUSTA, detallada paso a paso, con instrucciones claras y precisas, organizada secuencialmente siguiendo estrictamente los procesos didácticos de la competencia seleccionada, hasta obtener un producto o evidencia de aprendizaje que responda al propósito.
+        5. La "Ficha de Aplicación" debe ser modernizada y robusta, funcionando como una guía de práctica para obtener evidencias de aprendizaje. Debe incluir ejercicios contextualizados a la realidad del estudiante, alineados estrictamente con el propósito, el instrumento de evaluación (${data.instrument}) y los criterios de evaluación establecidos.
       `;
 
       if (contents.length === 0) {
@@ -830,7 +863,7 @@ export default function App() {
                   new TableCell({ children: row.capacities.map((c: string) => new Paragraph(`- ${c}`)) }),
                   new TableCell({ children: row.criteria.map((c: string) => new Paragraph(`- ${c}`)) }),
                   new TableCell({ children: (row.instruments || [data.instrument]).map((i: string) => new Paragraph(`- ${i}`)) }),
-                  new TableCell({ children: [new Paragraph("Se evidencia en el desarrollo de la sesión")] }),
+                  new TableCell({ children: [new Paragraph(row.evidence || "Se evidencia en el desarrollo de la sesión")] }),
                 ],
               })),
             ],
@@ -958,13 +991,61 @@ export default function App() {
             ],
           }),
 
-          // VII. TEORÍA DEL TEMA
-          ...(data.generateTheory ? [
+          // VII. GUÍA DE ACTIVIDADES DE APRENDIZAJE
+          ...(data.generateActivities && generatedContent.learningGuide ? [
             new Paragraph({
-              children: [new TextRun({ text: "VII. TEORÍA DEL TEMA", bold: true })],
+              children: [new TextRun({ text: "VII. GUÍA DE ACTIVIDADES DE APRENDIZAJE", bold: true, color: "1a5f7a" })],
               spacing: { before: 400, after: 100 },
             }),
-            new Paragraph(generatedContent.theory)
+            new Paragraph({
+              children: [new TextRun({ text: generatedContent.learningGuide.title, bold: true, size: 24 })],
+              alignment: AlignmentType.CENTER,
+              spacing: { after: 200 }
+            }),
+            new Paragraph({
+              children: [new TextRun({ text: generatedContent.learningGuide.introduction, italics: true })],
+              spacing: { after: 300 }
+            }),
+            ...generatedContent.learningGuide.steps.map((step: any) => [
+              new Paragraph({
+                children: [
+                  new TextRun({ text: `Paso ${step.stepNumber}: ${step.title}`, bold: true, color: "1a5f7a" })
+                ],
+                spacing: { before: 200, after: 100 }
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Proceso Didáctico: ", bold: true }),
+                  new TextRun({ text: step.didacticProcess })
+                ],
+                spacing: { after: 100 }
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Instrucciones: ", bold: true }),
+                  new TextRun({ text: step.instructions })
+                ],
+                spacing: { after: 100 }
+              }),
+              new Paragraph({
+                text: step.detailedActivity,
+                spacing: { after: 100 }
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Recursos: ", bold: true, size: 18 }),
+                  new TextRun({ text: step.resources, size: 18 })
+                ],
+                spacing: { after: 200 }
+              })
+            ]).flat(),
+            new Paragraph({
+              children: [
+                new TextRun({ text: "PRODUCTO / EVIDENCIA FINAL: ", bold: true, color: "1a5f7a" }),
+                new TextRun({ text: generatedContent.learningGuide.finalProduct, bold: true })
+              ],
+              spacing: { before: 300, after: 200 }
+            })
           ] : []),
 
           // VIII. INSTRUMENTO DE EVALUACIÓN
@@ -1000,6 +1081,76 @@ export default function App() {
           ] : [
             new Paragraph("Se adjunta el instrumento seleccionado para la evaluación de las evidencias de aprendizaje.")
           ]),
+
+          // IX. FICHA DE APLICACIÓN (GUÍA DE PRÁCTICA)
+          ...(data.generateApplication && generatedContent.applicationSheet ? [
+            new Paragraph({
+              children: [new TextRun({ text: "IX. FICHA DE APLICACIÓN (GUÍA DE PRÁCTICA)", bold: true, color: "1a5f7a" })],
+              spacing: { before: 400, after: 100 },
+            }),
+            new Paragraph({
+              children: [new TextRun({ text: generatedContent.applicationSheet.title, bold: true, size: 24 })],
+              alignment: AlignmentType.CENTER,
+              spacing: { after: 200 }
+            }),
+            new Paragraph({
+              children: [new TextRun({ text: "Situación Contextualizada:", bold: true })],
+              spacing: { after: 100 }
+            }),
+            new Paragraph({
+              text: generatedContent.applicationSheet.contextualizedSituation,
+              spacing: { after: 200 }
+            }),
+            ...generatedContent.applicationSheet.activities.map((activity: any, idx: number) => [
+              new Paragraph({
+                children: [
+                  new TextRun({ text: `Actividad ${idx + 1}: ${activity.title}`, bold: true, color: "1a5f7a" })
+                ],
+                spacing: { before: 200, after: 100 }
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Instrucciones: ", bold: true }),
+                  new TextRun({ text: activity.instructions })
+                ],
+                spacing: { after: 100 }
+              }),
+              new Paragraph({
+                text: activity.content,
+                spacing: { after: 100 }
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Alineación: ", italics: true, size: 18 }),
+                  new TextRun({ text: activity.alignment, italics: true, size: 18 })
+                ],
+                spacing: { after: 200 }
+              })
+            ]).flat(),
+            new Paragraph({
+              children: [new TextRun({ text: "AUTOEVALUACIÓN", bold: true, color: "1a5f7a" })],
+              spacing: { before: 300, after: 100 }
+            }),
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              rows: [
+                new TableRow({
+                  children: [
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Criterios de Evaluación", bold: true })] })] }),
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "¿Lo logré?", bold: true })] })] }),
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "¿Qué puedo mejorar?", bold: true })] })] }),
+                  ]
+                }),
+                ...generatedContent.applicationSheet.selfEvaluation.map((item: any) => new TableRow({
+                  children: [
+                    new TableCell({ children: [new Paragraph(item.criterion)] }),
+                    new TableCell({ children: [new Paragraph("")] }),
+                    new TableCell({ children: [new Paragraph("")] }),
+                  ]
+                }))
+              ]
+            })
+          ] : []),
         ],
       }],
     });
@@ -1895,17 +2046,17 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <label className={cn(
                   "flex items-start gap-4 p-4 rounded-2xl border transition-all cursor-pointer",
-                  data.generateTheory ? "bg-emerald-500/10 border-emerald-500/50" : "bg-slate-800/30 border-slate-700 hover:border-slate-500"
+                  data.generateActivities ? "bg-emerald-500/10 border-emerald-500/50" : "bg-slate-800/30 border-slate-700 hover:border-slate-500"
                 )}>
                   <input 
                     type="checkbox"
-                    checked={data.generateTheory}
-                    onChange={(e) => setData(prev => ({ ...prev, generateTheory: e.target.checked }))}
+                    checked={data.generateActivities}
+                    onChange={(e) => setData(prev => ({ ...prev, generateActivities: e.target.checked }))}
                     className="mt-1 w-4 h-4 text-emerald-500 rounded focus:ring-emerald-500 bg-slate-800 border-slate-700"
                   />
                   <div>
-                    <span className="block font-bold text-white">Generar Teoría del Tema</span>
-                    <span className="text-xs text-slate-500">Crea un resumen teórico detallado para la sesión.</span>
+                    <span className="block font-bold text-white">Generar Actividades de aprendizaje</span>
+                    <span className="text-xs text-slate-500">Guía de aprendizaje paso a paso según secuencia didáctica.</span>
                   </div>
                 </label>
                 <label className={cn(
@@ -1920,7 +2071,7 @@ export default function App() {
                   />
                   <div>
                     <span className="block font-bold text-white">Generar Ficha de Aplicación</span>
-                    <span className="text-xs text-slate-500">Crea preguntas y actividades de evaluación.</span>
+                    <span className="text-xs text-slate-500">Guía de práctica robusta con ejercicios contextualizados para obtener evidencias.</span>
                   </div>
                 </label>
               </div>
@@ -2007,6 +2158,15 @@ export default function App() {
                         </div>
 
                         <div className="space-y-4">
+                          <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Evidencia de Aprendizaje</h4>
+                          <div className="p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-xl">
+                            <p className="text-[11px] text-slate-300 leading-relaxed">
+                              {generatedContent.learningTable?.[0]?.evidence || "No especificada"}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-4">
                           <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Elementos Transversales</h4>
                           <div className="grid grid-cols-2 gap-2">
                             <div className="p-3 bg-emerald-500/5 border border-emerald-500/10 rounded-xl">
@@ -2022,6 +2182,16 @@ export default function App() {
                               </p>
                             </div>
                           </div>
+                          {generatedContent.transversalCompetencies?.some((c: any) => c.evidence) && (
+                            <div className="mt-2 p-3 bg-slate-800/50 border border-slate-700/50 rounded-xl">
+                              <p className="text-[9px] font-bold text-slate-500 uppercase mb-1">Evidencia Transversal (TIC/Autonomía)</p>
+                              {generatedContent.transversalCompetencies.filter((c: any) => c.evidence).map((c: any, idx: number) => (
+                                <p key={idx} className="text-[10px] text-slate-400 leading-tight mb-1">
+                                  <span className="font-bold text-emerald-500/70">{c.competency}:</span> {c.evidence}
+                                </p>
+                              ))}
+                            </div>
+                          )}
                         </div>
 
                         {generatedContent.customData && Object.keys(generatedContent.customData).length > 0 && (
@@ -2034,6 +2204,44 @@ export default function App() {
                                   <span className="text-[10px] text-slate-400 text-right">{String(val)}</span>
                                 </div>
                               ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {generatedContent.learningGuide && (
+                          <div className="space-y-4">
+                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Guía de Actividades</h4>
+                            <div className="p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-xl space-y-3">
+                              <p className="text-xs font-bold text-emerald-400">{generatedContent.learningGuide.title}</p>
+                              <p className="text-[10px] text-slate-400 italic line-clamp-2">{generatedContent.learningGuide.introduction}</p>
+                              <div className="space-y-2">
+                                {generatedContent.learningGuide.steps.slice(0, 2).map((step: any) => (
+                                  <div key={step.stepNumber} className="text-[10px] text-slate-300">
+                                    <span className="font-bold text-emerald-500">Paso {step.stepNumber}:</span> {step.title}
+                                  </div>
+                                ))}
+                                {generatedContent.learningGuide.steps.length > 2 && (
+                                  <p className="text-[9px] text-slate-500">... y {generatedContent.learningGuide.steps.length - 2} pasos más</p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {generatedContent.applicationSheet && (
+                          <div className="space-y-4">
+                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Ficha de Aplicación</h4>
+                            <div className="p-4 bg-blue-500/5 border border-blue-500/10 rounded-xl space-y-3">
+                              <p className="text-xs font-bold text-blue-400">{generatedContent.applicationSheet.title}</p>
+                              <p className="text-[10px] text-slate-400 line-clamp-2">{generatedContent.applicationSheet.contextualizedSituation}</p>
+                              <div className="flex items-center gap-2">
+                                <div className="px-2 py-1 bg-blue-500/10 rounded text-[9px] font-bold text-blue-400 uppercase">
+                                  {generatedContent.applicationSheet.activities.length} Actividades
+                                </div>
+                                <div className="px-2 py-1 bg-slate-800 rounded text-[9px] font-bold text-slate-500 uppercase">
+                                  Autoevaluación Incluida
+                                </div>
+                              </div>
                             </div>
                           </div>
                         )}
