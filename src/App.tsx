@@ -17,7 +17,10 @@ import {
   FileUp,
   Upload,
   FileText,
-  GraduationCap
+  GraduationCap,
+  Eye,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
@@ -35,7 +38,9 @@ import {
   BorderStyle, 
   AlignmentType,
   HeadingLevel,
-  VerticalAlign
+  VerticalAlign,
+  TableBorders,
+  ImageRun
 } from 'docx';
 import { saveAs } from 'file-saver';
 import { cn } from './lib/utils';
@@ -55,65 +60,23 @@ import {
   OPCIONES_RECURSOS_2026,
   OPCIONES_DIVERSIDAD_2026
 } from './constants';
+import { SessionData, SpecialNeedStudent, SessionMoment } from './types';
+import { FreeMode } from './components/modes/FreeMode';
+import { UnitMode } from './components/modes/UnitMode';
+import { BooksMode } from './components/modes/BooksMode';
+import { TemplateMode } from './components/modes/TemplateMode';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-interface SpecialNeedStudent {
-  id: string;
-  name: string;
-  condition: string;
-  activity: string;
-}
-
-interface SessionData {
-  teacherName: string;
-  institution: string;
-  directorName: string;
-  studentContext: string;
-  level: string;
-  grade: string;
-  area: string;
-  topic: string;
-  sessionTitle: string;
-  bimestre: string;
-  unit: string;
-  sessionNumber: string;
-  date: string;
-  duration: string;
-  instrument: string;
-  studentList: string;
-  competencies: string[];
-  aiSuggestCompetency: boolean;
-  transversalCompetencies: string[];
-  transversalApproaches: string[];
-  specialNeeds: SpecialNeedStudent[];
-  generateActivities: boolean;
-  generateApplication: boolean;
-  templateFile?: {
-    data: string;
-    mimeType: string;
-    name: string;
-  };
-  detectedSchema?: {
-    detectedFields: string[];
-    structureDescription: string;
-    customSections: { title: string; fields: string[] }[];
-  };
-  unitPurpose?: string;
-  inclusion2026?: string;
-  resources2026?: string;
-  resources2026Custom?: string;
-  diversity2026?: string;
-  diversity2026Custom?: string;
-  dynamicFieldsValues: Record<string, string>;
-}
-
 export default function App() {
   const [view, setView] = useState<'landing' | 'form'>('landing');
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [mode, setMode] = useState<'UNIT' | 'BOOKS' | 'FREE' | 'TEMPLATE' | null>(null);
   const [unitTab, setUnitTab] = useState<'upload' | 'current'>('upload');
+  const [templateTab, setTemplateTab] = useState<'SUBIR' | 'MI_SESION'>('SUBIR');
   const [data, setData] = useState<SessionData>({
     teacherName: '',
+    teacherGender: 'male',
     institution: '',
     directorName: '',
     studentContext: '',
@@ -136,13 +99,28 @@ export default function App() {
     specialNeeds: [],
     generateActivities: true,
     generateApplication: true,
+    schoolLogo: '',
     unitPurpose: '',
     inclusion2026: 'Ninguno',
     resources2026: 'Ninguno',
     resources2026Custom: '',
     diversity2026: 'Ninguno',
     diversity2026Custom: '',
+    learningPurposeMode: 'auto',
+    manualLearningPurpose: '',
     dynamicFieldsValues: {},
+    moments: {
+      inicio: { activity: '', resources: '', time: '15' },
+      desarrollo: { activity: '', resources: '', time: '60' },
+      cierre: { activity: '', resources: '', time: '15' }
+    },
+    learningTable: [],
+    transversalCompetencyData: [],
+    transversalApproachData: [],
+    learningGuide: null,
+    applicationSheet: null,
+    resources: [],
+    specialNeedsData: []
   });
 
   const [isGenerating, setIsGenerating] = useState(false);
@@ -157,7 +135,17 @@ export default function App() {
   const [currentListName, setCurrentListName] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setData(prev => ({ ...prev, schoolLogo: event.target?.result as string }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, fileType: 'UNIT' | 'SCHEMA' | 'TEMPLATE' = 'TEMPLATE') => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -185,18 +173,14 @@ export default function App() {
         const arrayBuffer = await file.arrayBuffer();
         const result = await mammoth.extractRawText({ arrayBuffer });
         textContent = result.value;
-        mimeType = 'text/plain'; // We'll send text to Gemini
+        mimeType = 'text/plain';
       } else if (file.type === 'application/pdf') {
-        // We can send PDF directly to Gemini if it's supported, 
-        // but let's try to extract some text or just send as is.
-        // Gemini 1.5+ supports PDF base64.
         const reader = new FileReader();
         base64Data = await new Promise((resolve) => {
           reader.onload = (e) => resolve((e.target?.result as string).split(',')[1]);
           reader.readAsDataURL(file);
         });
       } else {
-        // Image
         const reader = new FileReader();
         base64Data = await new Promise((resolve) => {
           reader.onload = (e) => resolve((e.target?.result as string).split(',')[1]);
@@ -204,16 +188,25 @@ export default function App() {
         });
       }
 
-      setData(prev => ({
-        ...prev,
-        templateFile: {
-          data: base64Data || textContent,
-          mimeType: mimeType,
-          name: file.name
-        }
-      }));
+      const fileObj = {
+        data: base64Data || textContent,
+        mimeType: mimeType,
+        name: file.name
+      };
+
+      setData(prev => {
+        const newData = { ...prev };
+        if (fileType === 'UNIT') newData.unitFile = fileObj;
+        else if (fileType === 'SCHEMA') newData.sessionSchemaFile = fileObj;
+        else newData.templateFile = fileObj;
+        return newData;
+      });
       
-      await analyzeTemplate(base64Data || textContent, mimeType);
+      if (fileType === 'UNIT') {
+        await analyzeTemplate(base64Data || textContent, mimeType, 'UNIT');
+      } else if (fileType === 'SCHEMA' || fileType === 'TEMPLATE') {
+        await analyzeTemplate(base64Data || textContent, mimeType, 'SCHEMA');
+      }
     } catch (err) {
       console.error(err);
       setError("Error al procesar el archivo.");
@@ -221,52 +214,98 @@ export default function App() {
     }
   };
 
-  const analyzeTemplate = async (dataOrText: string, mimeType: string) => {
+  const analyzeTemplate = async (dataOrText: string, mimeType: string, analysisType: 'UNIT' | 'SCHEMA') => {
     setIsAnalyzingTemplate(true);
     setError(null);
 
     try {
-      const prompt = `Analiza este archivo (esquema o formato de sesión de aprendizaje). 
-      Identifica todas las secciones, tablas y campos que contiene.
+      let prompt = '';
       
-      Debes mapear los campos detectados a estas categorías estándar si existen:
-      - "teacherName": Nombre del docente
-      - "institution": Institución Educativa
-      - "level": Nivel (Primaria/Secundaria)
-      - "grade": Grado
-      - "bimestre": Bimestre o Trimestre
-      - "area": Área curricular
-      - "topic": Tema o contenido específico
-      - "sessionTitle": Título de la sesión
-      - "unit": Unidad de aprendizaje
-      - "sessionNumber": Nº de sesión
-      - "date": Fecha
-      - "duration": Tiempo o duración
-      - "instrument": Instrumento de evaluación
-      - "studentContext": Contexto de los estudiantes (DUA)
-      - "competencies": Competencias, capacidades o desempeños
-      - "transversalCompetencies": Competencias transversales
-      - "transversalApproaches": Enfoques transversales
-      
-      REGLAS CRÍTICAS:
-      1. Si un campo del archivo se puede mapear a una de las categorías anteriores, INCLÚYELO en "mapping" y NO lo pongas en "missingFields".
-      2. "missingFields" SOLO debe contener campos que NO existen en la lista anterior (ejemplo: "Eje articulador", "Propósito de la unidad", "Recursos TIC específicos").
-      3. "hiddenStandardFields" debe contener las categorías estándar de la lista anterior que NO aparecen en el archivo analizado.
-      
-      Devuelve un objeto JSON con esta estructura:
-      {
-        "detectedFields": ["Campo 1", "Campo 2", ...],
-        "mapping": {
-          "nombre_campo_en_archivo": "nombre_categoria_estandar"
-        },
-        "missingFields": ["Campo nuevo 1", "Campo nuevo 2", ...],
-        "hiddenStandardFields": ["categoria_estandar_a_ocultar_1", ...],
-        "structureDescription": "Breve descripción"
-      }`;
+      if (analysisType === 'UNIT') {
+        prompt = `Analiza esta UNIDAD DE APRENDIZAJE y extrae la información específica para la SESIÓN Nº ${data.sessionNumber || '1'}.
+        
+        Debes buscar en la secuencia de sesiones de la unidad y extraer:
+        1. "sessionTitle": El título de la sesión ${data.sessionNumber || '1'}.
+        2. "topic": El tema o campo temático de esa sesión.
+        3. "area": El área curricular de la unidad.
+        4. "level": El nivel educativo.
+        5. "grade": El grado.
+        6. "unit": El título de la unidad completa.
+        7. "competencies": Las competencias y capacidades asociadas a esta sesión específica.
+        8. "studentContext": Si menciona contexto o situación significativa, extráelo.
+        9. "learningTable": Genera una matriz con la competencia, capacidades, desempeño precisado y evidencia que se menciona para esta sesión ${data.sessionNumber || '1'}.
+        10. "moments": Si la unidad describe brevemente actividades para esta sesión, extráelas para Inicio, Desarrollo y Cierre.
+        
+        IMPORTANTE: Mapea todo a los campos estándar. No inventes campos nuevos si puedes ponerlos en los existentes.
+        
+        Devuelve un objeto JSON con esta estructura:
+        {
+          "sessionTitle": "...",
+          "topic": "...",
+          "area": "...",
+          "level": "...",
+          "grade": "...",
+          "unit": "...",
+          "sessionNumber": "${data.sessionNumber || '1'}",
+          "studentContext": "...",
+          "learningTable": [
+            {
+              "competency": "...",
+              "capacities": ["...", "..."],
+              "desempeño_precisado": "...",
+              "evidence": "...",
+              "instruments": ["..."]
+            }
+          ],
+          "moments": {
+            "inicio": { "activity": "...", "resources": "...", "time": "15" },
+            "desarrollo": { "activity": "...", "resources": "...", "time": "60" },
+            "cierre": { "activity": "...", "resources": "...", "time": "15" }
+          }
+        }`;
+      } else {
+        prompt = `Analiza este archivo (esquema o formato de sesión de aprendizaje). 
+        Identifica todas las secciones, tablas y campos que contiene.
+        
+        Debes mapear los campos detectados a estas categorías estándar si existen:
+        - "teacherName": Nombre del docente
+        - "institution": Institución Educativa
+        - "level": Nivel (Primaria/Secundaria)
+        - "grade": Grado
+        - "bimestre": Bimestre o Trimestre
+        - "area": Área curricular
+        - "topic": Tema o contenido específico
+        - "sessionTitle": Título de la sesión
+        - "unit": Unidad de aprendizaje
+        - "sessionNumber": Nº de sesión
+        - "date": Fecha
+        - "duration": Tiempo o duración
+        - "instrument": Instrumento de evaluación
+        - "studentContext": Contexto de los estudiantes (DUA)
+        - "competencies": Competencias, capacidades o desempeños
+        - "transversalCompetencies": Competencias transversales
+        - "transversalApproaches": Enfoques transversales
+        
+        REGLAS CRÍTICAS:
+        1. Si un campo del archivo se puede mapear a una de las categorías anteriores, INCLÚYELO en "mapping" y NO lo pongas en "missingFields".
+        2. "missingFields" SOLO debe contener campos que NO existen en la lista anterior (ejemplo: "Eje articulador", "Propósito de la unidad", "Recursos TIC específicos").
+        3. "hiddenStandardFields" debe contener las categorías estándar de la lista anterior que NO aparecen en el archivo analizado.
+        
+        Devuelve un objeto JSON con esta estructura:
+        {
+          "detectedFields": ["Campo 1", "Campo 2", ...],
+          "mapping": {
+            "nombre_campo_en_archivo": "nombre_categoria_estandar"
+          },
+          "missingFields": ["Campo nuevo 1", "Campo nuevo 2", ...],
+          "hiddenStandardFields": ["categoria_estandar_a_ocultar_1", ...],
+          "structureDescription": "Breve descripción"
+        }`;
+      }
 
       let parts: any[] = [{ text: prompt }];
       if (mimeType === 'text/plain') {
-        parts.push({ text: `Contenido del esquema:\n${dataOrText}` });
+        parts.push({ text: `Contenido del archivo:\n${dataOrText}` });
       } else {
         parts.push({ inlineData: { data: dataOrText, mimeType } });
       }
@@ -277,48 +316,842 @@ export default function App() {
         config: { responseMimeType: "application/json" }
       });
 
-      const schema = JSON.parse(response.text || '{}');
+      const result = JSON.parse(response.text || '{}');
       
-      const standardCategories = [
-        'teacherName', 'institution', 'level', 'grade', 'bimestre', 'area', 
-        'topic', 'sessionTitle', 'unit', 'sessionNumber', 'date', 'duration', 
-        'instrument', 'studentContext', 'competencies', 'transversalCompetencies', 
-        'transversalApproaches'
-      ];
+      if (analysisType === 'UNIT') {
+        setData(prev => ({
+          ...prev,
+          sessionTitle: result.sessionTitle || prev.sessionTitle,
+          topic: result.topic || prev.topic,
+          area: result.area || prev.area,
+          level: result.level || prev.level,
+          grade: result.grade || prev.grade,
+          unit: result.unit || prev.unit,
+          sessionNumber: result.sessionNumber || prev.sessionNumber,
+          studentContext: result.studentContext || prev.studentContext,
+          learningTable: result.learningTable || prev.learningTable,
+          moments: result.moments || prev.moments,
+          detectedSchema: null 
+        }));
+      } else {
+        const schema = result;
+        const standardCategories = [
+          'teacherName', 'institution', 'level', 'grade', 'bimestre', 'area', 
+          'topic', 'sessionTitle', 'unit', 'sessionNumber', 'date', 'duration', 
+          'instrument', 'studentContext', 'competencies', 'transversalCompetencies', 
+          'transversalApproaches'
+        ];
 
-      // Initialize dynamic fields only for those that are truly missing from standard
-      // and not already mapped to a standard category
-      const mappedStandardFields = Object.values(schema.mapping || {});
-      const dynamicFields = (schema.missingFields || [])
-        .filter((field: string) => {
-          // Check if the field name itself is a standard category (unlikely but possible)
-          if (standardCategories.includes(field)) return false;
-          // Check if this field was already mapped to a standard category
-          const mappedTo = schema.mapping?.[field];
-          if (mappedTo && standardCategories.includes(mappedTo)) return false;
-          return true;
-        })
-        .reduce((acc: any, field: string) => {
-          acc[field] = '';
-          return acc;
-        }, {});
+        const dynamicFields = (schema.missingFields || [])
+          .filter((field: string) => {
+            if (standardCategories.includes(field)) return false;
+            const mappedTo = schema.mapping?.[field];
+            if (mappedTo && standardCategories.includes(mappedTo)) return false;
+            return true;
+          })
+          .reduce((acc: any, field: string) => {
+            acc[field] = '';
+            return acc;
+          }, {});
 
-      setData(prev => ({ 
-        ...prev, 
-        detectedSchema: schema,
-        dynamicFieldsValues: dynamicFields
-      }));
+        setData(prev => ({ 
+          ...prev, 
+          detectedSchema: schema,
+          dynamicFieldsValues: dynamicFields
+        }));
+      }
     } catch (err) {
       console.error(err);
-      setError("No se pudo analizar el esquema automáticamente.");
+      setError("No se pudo analizar el documento automáticamente.");
     } finally {
       setIsAnalyzingTemplate(false);
     }
   };
 
+  const renderMySessionTab = () => {
+    return (
+      <div className="space-y-12">
+        {/* I. DATOS INFORMATIVOS */}
+        <section className="space-y-8">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold text-sm border border-emerald-500/20">I</div>
+            <h2 className="text-2xl font-bold tracking-tight">Datos Informativos</h2>
+          </div>
+          
+          <div className="glass-panel rounded-[32px] p-8 space-y-8">
+            <div className="flex flex-col md:flex-row gap-8 items-start">
+              <div className="w-full md:w-1/3 space-y-4">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                  <Upload size={14} /> Insignia del Colegio
+                </label>
+                <div className="relative group">
+                  <input 
+                    type="file" 
+                    accept="image/*"
+                    onChange={handleLogoUpload}
+                    className="hidden"
+                    id="logo-upload"
+                  />
+                  <label 
+                    htmlFor="logo-upload"
+                    className={cn(
+                      "flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-3xl cursor-pointer transition-all duration-300 overflow-hidden",
+                      data.schoolLogo ? "border-emerald-500/50 bg-emerald-500/5" : "border-white/10 bg-white/[0.02] hover:border-emerald-500/30 hover:bg-white/[0.04]"
+                    )}
+                  >
+                    {data.schoolLogo ? (
+                      <img src={data.schoolLogo} alt="Logo" className="w-full h-full object-contain p-4" referrerPolicy="no-referrer" />
+                    ) : (
+                      <div className="flex flex-col items-center gap-2">
+                        <Plus className="text-slate-400 w-6 h-6" />
+                        <span className="text-[10px] font-bold text-slate-500 uppercase">Subir Logo</span>
+                      </div>
+                    )}
+                  </label>
+                </div>
+              </div>
+              
+              <div className="w-full md:w-2/3 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Institución Educativa</label>
+                  <input 
+                    type="text" 
+                    name="institution"
+                    value={data.institution}
+                    onChange={handleInputChange}
+                    className="minimal-input w-full"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Nombre del Docente</label>
+                  <input 
+                    type="text" 
+                    name="teacherName"
+                    value={data.teacherName}
+                    onChange={handleInputChange}
+                    className="minimal-input w-full"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Grado y Sección</label>
+                  <input 
+                    type="text" 
+                    name="grade"
+                    value={data.grade}
+                    onChange={handleInputChange}
+                    className="minimal-input w-full"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Área Curricular</label>
+                  <input 
+                    type="text" 
+                    name="area"
+                    value={data.area}
+                    onChange={handleInputChange}
+                    className="minimal-input w-full"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Director(a)</label>
+                  <input 
+                    type="text" 
+                    name="directorName"
+                    value={data.directorName}
+                    onChange={handleInputChange}
+                    className="minimal-input w-full"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Unidad</label>
+                  <input 
+                    type="text" 
+                    name="unit"
+                    value={data.unit}
+                    onChange={handleInputChange}
+                    className="minimal-input w-full"
+                    placeholder="Ej: Unidad 1"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Nº Sesión</label>
+                  <input 
+                    type="text" 
+                    name="sessionNumber"
+                    value={data.sessionNumber}
+                    onChange={handleInputChange}
+                    className="minimal-input w-full"
+                    placeholder="Ej: 05"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Fecha</label>
+                  <input 
+                    type="date" 
+                    name="date"
+                    value={data.date}
+                    onChange={handleInputChange}
+                    className="minimal-input w-full"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Duración (min)</label>
+                  <input 
+                    type="text" 
+                    name="duration"
+                    value={data.duration}
+                    onChange={handleInputChange}
+                    className="minimal-input w-full"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* CAMPOS PERSONALIZADOS (Si se detectaron en el esquema) */}
+        {Object.keys(data.dynamicFieldsValues).length > 0 && (
+          <section className="space-y-8">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-400 flex items-center justify-center font-bold text-sm border border-blue-500/20">
+                <Sparkles size={16} />
+              </div>
+              <h2 className="text-2xl font-bold tracking-tight">Campos del Esquema Detectados</h2>
+            </div>
+            <div className="glass-panel rounded-[32px] p-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+              {Object.keys(data.dynamicFieldsValues).map((field) => (
+                <div key={field} className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{field}</label>
+                  <textarea 
+                    value={data.dynamicFieldsValues[field]}
+                    onChange={(e) => handleDynamicFieldChange(field, e.target.value)}
+                    rows={2}
+                    className="minimal-input w-full resize-none"
+                  />
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* II. TÍTULO Y PROPÓSITO */}
+        <section className="space-y-8">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold text-sm border border-emerald-500/20">II</div>
+            <h2 className="text-2xl font-bold tracking-tight">Título y Propósito</h2>
+          </div>
+          <div className="glass-panel rounded-[32px] p-8 space-y-6">
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Título de la Sesión</label>
+              <textarea 
+                name="sessionTitle"
+                value={data.sessionTitle}
+                onChange={handleInputChange}
+                rows={2}
+                className="minimal-input w-full resize-none"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Propósito de Aprendizaje</label>
+              <textarea 
+                name="unitPurpose"
+                value={data.unitPurpose}
+                onChange={handleInputChange}
+                rows={3}
+                className="minimal-input w-full resize-none"
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* IV. COMPETENCIAS TRANSVERSALES */}
+        <section className="space-y-8">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold text-sm border border-indigo-500/20">IV</div>
+            <h2 className="text-2xl font-bold tracking-tight">Competencias Transversales</h2>
+          </div>
+          <div className="overflow-x-auto rounded-[32px] border border-white/5">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-white/5">
+                  <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest border border-white/10">Competencia/Capacidad</th>
+                  <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest border border-white/10">Desempeño Precisado</th>
+                  <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest border border-white/10">¿Cómo se evidencia?</th>
+                  <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest border border-white/10">Instrumento</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.transversalCompetencyData.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-white/[0.02] transition-colors">
+                    <td className="p-4 border border-white/10">
+                      <div className="space-y-2">
+                        <textarea 
+                          value={row.competency}
+                          onChange={(e) => {
+                            const newData = [...data.transversalCompetencyData];
+                            newData[idx].competency = e.target.value;
+                            setData(prev => ({ ...prev, transversalCompetencyData: newData }));
+                          }}
+                          className="w-full bg-transparent border-none focus:ring-0 text-sm font-bold text-indigo-400 resize-none"
+                          rows={2}
+                        />
+                        <textarea 
+                          value={Array.isArray(row.capacities) ? row.capacities.join('\n') : row.capacities}
+                          onChange={(e) => {
+                            const newData = [...data.transversalCompetencyData];
+                            newData[idx].capacities = e.target.value.split('\n');
+                            setData(prev => ({ ...prev, transversalCompetencyData: newData }));
+                          }}
+                          className="w-full bg-transparent border-none focus:ring-0 text-[10px] resize-none text-slate-400"
+                          rows={2}
+                        />
+                      </div>
+                    </td>
+                    <td className="p-4 border border-white/10">
+                      <textarea 
+                        value={row.desempeño_precisado}
+                        onChange={(e) => {
+                          const newData = [...data.transversalCompetencyData];
+                          newData[idx].desempeño_precisado = e.target.value;
+                          setData(prev => ({ ...prev, transversalCompetencyData: newData }));
+                        }}
+                        className="w-full bg-transparent border-none focus:ring-0 text-[10px] resize-none"
+                        rows={3}
+                      />
+                    </td>
+                    <td className="p-4 border border-white/10">
+                      <textarea 
+                        value={row.evidence}
+                        onChange={(e) => {
+                          const newData = [...data.transversalCompetencyData];
+                          newData[idx].evidence = e.target.value;
+                          setData(prev => ({ ...prev, transversalCompetencyData: newData }));
+                        }}
+                        className="w-full bg-transparent border-none focus:ring-0 text-[10px] resize-none"
+                        rows={3}
+                      />
+                    </td>
+                    <td className="p-4 border border-white/10">
+                      <textarea 
+                        value={Array.isArray(row.instruments) ? row.instruments.join('\n') : row.instruments}
+                        onChange={(e) => {
+                          const newData = [...data.transversalCompetencyData];
+                          newData[idx].instruments = e.target.value.split('\n');
+                          setData(prev => ({ ...prev, transversalCompetencyData: newData }));
+                        }}
+                        className="w-full bg-transparent border-none focus:ring-0 text-[10px] resize-none"
+                        rows={2}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* V. ENFOQUES TRANSVERSALES */}
+        <section className="space-y-8">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-400 flex items-center justify-center font-bold text-sm border border-amber-500/20">V</div>
+            <h2 className="text-2xl font-bold tracking-tight">Enfoques Transversales</h2>
+          </div>
+          <div className="overflow-x-auto rounded-[32px] border border-white/5">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-white/5">
+                  <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest border border-white/10">Enfoque Transversal</th>
+                  <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest border border-white/10">Acciones Observables</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.transversalApproachData.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-white/[0.02] transition-colors">
+                    <td className="p-4 border border-white/10">
+                      <textarea 
+                        value={row.approach}
+                        onChange={(e) => {
+                          const newData = [...data.transversalApproachData];
+                          newData[idx].approach = e.target.value;
+                          setData(prev => ({ ...prev, transversalApproachData: newData }));
+                        }}
+                        className="w-full bg-transparent border-none focus:ring-0 text-sm font-bold text-amber-400 resize-none"
+                        rows={2}
+                      />
+                    </td>
+                    <td className="p-4 border border-white/10">
+                      <textarea 
+                        value={row.actions}
+                        onChange={(e) => {
+                          const newData = [...data.transversalApproachData];
+                          newData[idx].actions = e.target.value;
+                          setData(prev => ({ ...prev, transversalApproachData: newData }));
+                        }}
+                        className="w-full bg-transparent border-none focus:ring-0 text-[10px] resize-none"
+                        rows={3}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* III. TABLA DE APRENDIZAJE */}
+        <section className="space-y-8">
+          <div className="flex items-center justify-between mb-8">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold text-sm border border-emerald-500/20">III</div>
+              <h2 className="text-2xl font-bold tracking-tight">Matriz de Competencias</h2>
+            </div>
+            <button 
+              onClick={addLearningTableRow}
+              className="px-4 py-2 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/20 text-xs font-bold uppercase tracking-wider hover:bg-emerald-500/20 transition-all flex items-center gap-2"
+            >
+              <Plus size={14} /> Agregar Fila
+            </button>
+          </div>
+          <div className="overflow-x-auto rounded-[32px] border border-white/5">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-white/5">
+                  <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest border border-white/10">Competencia/Capacidad</th>
+                  <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest border border-white/10">Desempeño Precisado</th>
+                  <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest border border-white/10">Evidencia (Producto)</th>
+                  <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest border border-white/10">Instrumento</th>
+                  <th className="p-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest border border-white/10 w-10"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.learningTable.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-white/[0.02] transition-colors">
+                    <td className="p-4 border border-white/10">
+                      <div className="space-y-2">
+                        <textarea 
+                          value={row.competency}
+                          onChange={(e) => updateLearningTableRow(idx, 'competency', e.target.value)}
+                          className="w-full bg-transparent border-none focus:ring-0 text-sm font-bold text-emerald-400 resize-none"
+                          placeholder="Competencia..."
+                          rows={2}
+                        />
+                        <textarea 
+                          value={Array.isArray(row.capacities) ? row.capacities.join('\n') : row.capacities}
+                          onChange={(e) => updateLearningTableRow(idx, 'capacities', e.target.value.split('\n'))}
+                          className="w-full bg-transparent border-none focus:ring-0 text-[10px] resize-none text-slate-400"
+                          placeholder="Capacidades..."
+                          rows={3}
+                        />
+                      </div>
+                    </td>
+                    <td className="p-4 border border-white/10">
+                      <textarea 
+                        value={row.desempeño_precisado}
+                        onChange={(e) => updateLearningTableRow(idx, 'desempeño_precisado', e.target.value)}
+                        className="w-full bg-transparent border-none focus:ring-0 text-[10px] resize-none"
+                        rows={4}
+                        placeholder="Desempeño precisado..."
+                      />
+                    </td>
+                    <td className="p-4 border border-white/10">
+                      <textarea 
+                        value={row.evidence}
+                        onChange={(e) => updateLearningTableRow(idx, 'evidence', e.target.value)}
+                        className="w-full bg-transparent border-none focus:ring-0 text-[10px] resize-none"
+                        rows={4}
+                        placeholder="Evidencia..."
+                      />
+                    </td>
+                    <td className="p-4 border border-white/10">
+                      <textarea 
+                        value={Array.isArray(row.instruments) ? row.instruments.join('\n') : row.instruments}
+                        onChange={(e) => updateLearningTableRow(idx, 'instruments', e.target.value.split('\n'))}
+                        className="w-full bg-transparent border-none focus:ring-0 text-[10px] resize-none"
+                        rows={3}
+                        placeholder="Instrumentos..."
+                      />
+                    </td>
+                    <td className="p-4 border border-white/10">
+                      <button 
+                        onClick={() => removeLearningTableRow(idx)}
+                        className="p-2 text-slate-500 hover:text-rose-400 transition-colors"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {data.learningTable.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="p-12 text-center text-slate-500 italic text-sm">
+                      No hay competencias generadas aún. Genera una sesión para ver los campos.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* IV. MOMENTOS */}
+        <section className="space-y-8">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold text-sm border border-emerald-500/20">IV</div>
+            <h2 className="text-2xl font-bold tracking-tight">Momentos de la Sesión</h2>
+          </div>
+          
+          <div className="space-y-6">
+            {['inicio', 'desarrollo', 'cierre'].map((moment) => (
+              <div key={moment} className="glass-panel rounded-[32px] p-8 space-y-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-bold capitalize text-emerald-400">{moment}</h3>
+                  <div className="flex items-center gap-2">
+                    <Clock size={14} className="text-slate-500" />
+                    <input 
+                      type="text"
+                      value={data.moments[moment as keyof typeof data.moments].time}
+                      onChange={(e) => setData(prev => ({
+                        ...prev,
+                        moments: {
+                          ...prev.moments,
+                          [moment]: { ...prev.moments[moment as keyof typeof prev.moments], time: e.target.value }
+                        }
+                      }))}
+                      className="w-12 bg-white/5 border border-white/10 rounded-lg text-center text-xs py-1"
+                    />
+                    <span className="text-[10px] text-slate-500 uppercase font-bold">min</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Actividades</label>
+                    <textarea 
+                      value={data.moments[moment as keyof typeof data.moments].activity}
+                      onChange={(e) => setData(prev => ({
+                        ...prev,
+                        moments: {
+                          ...prev.moments,
+                          [moment]: { ...prev.moments[moment as keyof typeof prev.moments], activity: e.target.value }
+                        }
+                      }))}
+                      rows={6}
+                      className="minimal-input w-full resize-none"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Recursos</label>
+                    <textarea 
+                      value={data.moments[moment as keyof typeof data.moments].resources}
+                      onChange={(e) => setData(prev => ({
+                        ...prev,
+                        moments: {
+                          ...prev.moments,
+                          [moment]: { ...prev.moments[moment as keyof typeof prev.moments], resources: e.target.value }
+                        }
+                      }))}
+                      rows={6}
+                      className="minimal-input w-full resize-none"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* V. GUÍA DE APRENDIZAJE */}
+        {data.learningGuide && (
+          <section className="space-y-8">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold text-sm border border-emerald-500/20">V</div>
+              <h2 className="text-2xl font-bold tracking-tight">Guía de Aprendizaje</h2>
+            </div>
+            <div className="glass-panel rounded-[32px] p-8 space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Título de la Guía</label>
+                <input 
+                  type="text"
+                  value={data.learningGuide.title}
+                  onChange={(e) => updateLearningGuide('title', e.target.value)}
+                  className="minimal-input w-full"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Introducción</label>
+                <textarea 
+                  value={data.learningGuide.introduction}
+                  onChange={(e) => updateLearningGuide('introduction', e.target.value)}
+                  rows={3}
+                  className="minimal-input w-full resize-none"
+                />
+              </div>
+              <div className="space-y-4">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Pasos de la Guía</label>
+                {data.learningGuide.steps.map((step: any, idx: number) => (
+                  <div key={idx} className="p-6 bg-white/5 rounded-2xl border border-white/10 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-emerald-400">Paso {step.stepNumber}</span>
+                      <input 
+                        type="text"
+                        value={step.title}
+                        onChange={(e) => {
+                          const newSteps = [...data.learningGuide.steps];
+                          newSteps[idx] = { ...newSteps[idx], title: e.target.value };
+                          updateLearningGuide('steps', newSteps);
+                        }}
+                        className="bg-transparent border-none focus:ring-0 text-sm font-bold text-right"
+                      />
+                    </div>
+                    <textarea 
+                      value={step.instructions}
+                      onChange={(e) => {
+                        const newSteps = [...data.learningGuide.steps];
+                        newSteps[idx] = { ...newSteps[idx], instructions: e.target.value };
+                        updateLearningGuide('steps', newSteps);
+                      }}
+                      rows={2}
+                      className="minimal-input w-full text-xs"
+                      placeholder="Instrucciones..."
+                    />
+                    <textarea 
+                      value={step.detailedActivity}
+                      onChange={(e) => {
+                        const newSteps = [...data.learningGuide.steps];
+                        newSteps[idx] = { ...newSteps[idx], detailedActivity: e.target.value };
+                        updateLearningGuide('steps', newSteps);
+                      }}
+                      rows={3}
+                      className="minimal-input w-full text-xs"
+                      placeholder="Actividad detallada..."
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Producto Final</label>
+                <input 
+                  type="text"
+                  value={data.learningGuide.finalProduct}
+                  onChange={(e) => updateLearningGuide('finalProduct', e.target.value)}
+                  className="minimal-input w-full"
+                />
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* VI. FICHA DE APLICACIÓN */}
+        {data.applicationSheet && (
+          <section className="space-y-8">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold text-sm border border-emerald-500/20">VI</div>
+              <h2 className="text-2xl font-bold tracking-tight">Ficha de Aplicación</h2>
+            </div>
+            <div className="glass-panel rounded-[32px] p-8 space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Título de la Ficha</label>
+                <input 
+                  type="text"
+                  value={data.applicationSheet.title}
+                  onChange={(e) => updateApplicationSheet('title', e.target.value)}
+                  className="minimal-input w-full"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Situación Contextualizada</label>
+                <textarea 
+                  value={data.applicationSheet.contextualizedSituation}
+                  onChange={(e) => updateApplicationSheet('contextualizedSituation', e.target.value)}
+                  rows={4}
+                  className="minimal-input w-full resize-none"
+                />
+              </div>
+              <div className="space-y-4">
+                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Actividades de Aplicación</label>
+                {data.applicationSheet.activities.map((activity: any, idx: number) => (
+                  <div key={idx} className="p-6 bg-white/5 rounded-2xl border border-white/10 space-y-4">
+                    <input 
+                      type="text"
+                      value={activity.title}
+                      onChange={(e) => {
+                        const newActivities = [...data.applicationSheet.activities];
+                        newActivities[idx] = { ...newActivities[idx], title: e.target.value };
+                        updateApplicationSheet('activities', newActivities);
+                      }}
+                      className="bg-transparent border-none focus:ring-0 text-sm font-bold text-emerald-400 w-full"
+                    />
+                    <textarea 
+                      value={activity.instructions}
+                      onChange={(e) => {
+                        const newActivities = [...data.applicationSheet.activities];
+                        newActivities[idx] = { ...newActivities[idx], instructions: e.target.value };
+                        updateApplicationSheet('activities', newActivities);
+                      }}
+                      rows={2}
+                      className="minimal-input w-full text-xs"
+                      placeholder="Instrucciones..."
+                    />
+                    <textarea 
+                      value={activity.content}
+                      onChange={(e) => {
+                        const newActivities = [...data.applicationSheet.activities];
+                        newActivities[idx] = { ...newActivities[idx], content: e.target.value };
+                        updateApplicationSheet('activities', newActivities);
+                      }}
+                      rows={3}
+                      className="minimal-input w-full text-xs"
+                      placeholder="Contenido del reto..."
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* VII. RECURSOS */}
+        <section className="space-y-8">
+          <div className="flex items-center justify-between mb-8">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold text-sm border border-emerald-500/20">VII</div>
+              <h2 className="text-2xl font-bold tracking-tight">Recursos y Materiales</h2>
+            </div>
+            <button 
+              onClick={addResourceRow}
+              className="px-4 py-2 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/20 text-xs font-bold uppercase tracking-wider hover:bg-emerald-500/20 transition-all flex items-center gap-2"
+            >
+              <Plus size={14} /> Agregar Recurso
+            </button>
+          </div>
+          <div className="glass-panel rounded-[32px] p-8">
+            <div className="space-y-4">
+              {data.resources.map((resource, idx) => (
+                <div key={idx} className="flex flex-col md:flex-row gap-4 items-end bg-white/5 p-4 rounded-2xl border border-white/10">
+                  <div className="w-full md:w-1/4 space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Categoría</label>
+                    <input 
+                      type="text"
+                      value={resource.category}
+                      onChange={(e) => updateResourceRow(idx, 'category', e.target.value)}
+                      className="minimal-input w-full text-xs"
+                    />
+                  </div>
+                  <div className="w-full md:w-1/4 space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Material</label>
+                    <input 
+                      type="text"
+                      value={resource.material}
+                      onChange={(e) => updateResourceRow(idx, 'material', e.target.value)}
+                      className="minimal-input w-full text-xs"
+                    />
+                  </div>
+                  <div className="w-full md:w-2/5 space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Uso</label>
+                    <input 
+                      type="text"
+                      value={resource.use}
+                      onChange={(e) => updateResourceRow(idx, 'use', e.target.value)}
+                      className="minimal-input w-full text-xs"
+                    />
+                  </div>
+                  <button 
+                    onClick={() => removeResourceRow(idx)}
+                    className="p-2 text-slate-500 hover:text-rose-400 transition-colors mb-1"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+              {data.resources.length === 0 && (
+                <p className="text-center text-slate-500 italic text-sm py-8">No hay recursos listados.</p>
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  };
+
   const isFieldVisible = (fieldName: string) => {
+    if (mode === 'TEMPLATE' && templateTab === 'SUBIR') {
+      const allowedFields = [
+        'teacherName', 'institution', 'level', 'grade', 'area', 
+        'topic', 'unitPurpose', 'directorName', 'unit', 'sessionNumber', 
+        'date', 'duration', 'sessionTitle', 'studentContext', 'competencies',
+        'transversalCompetencies', 'transversalApproaches', 'instrument'
+      ];
+      return allowedFields.includes(fieldName);
+    }
     if (!data.detectedSchema) return true;
     return !data.detectedSchema.hiddenStandardFields?.includes(fieldName);
+  };
+
+  const updateLearningTableRow = (index: number, field: string, value: any) => {
+    setData(prev => {
+      const newTable = [...prev.learningTable];
+      newTable[index] = { ...newTable[index], [field]: value };
+      return { ...prev, learningTable: newTable };
+    });
+  };
+
+  const addLearningTableRow = () => {
+    setData(prev => ({
+      ...prev,
+      learningTable: [...prev.learningTable, { competency: '', capacities: [], criteria: [], instruments: [], evidence: '' }]
+    }));
+  };
+
+  const removeLearningTableRow = (index: number) => {
+    setData(prev => ({
+      ...prev,
+      learningTable: prev.learningTable.filter((_, i) => i !== index)
+    }));
+  };
+
+  const updateLearningGuide = (field: string, value: any) => {
+    setData(prev => ({
+      ...prev,
+      learningGuide: { ...prev.learningGuide, [field]: value }
+    }));
+  };
+
+  const updateApplicationSheet = (field: string, value: any) => {
+    setData(prev => ({
+      ...prev,
+      applicationSheet: { ...prev.applicationSheet, [field]: value }
+    }));
+  };
+
+  const updateResourceRow = (index: number, field: string, value: any) => {
+    setData(prev => {
+      const newResources = [...prev.resources];
+      newResources[index] = { ...newResources[index], [field]: value };
+      return { ...prev, resources: newResources };
+    });
+  };
+
+  const addResourceRow = () => {
+    setData(prev => ({
+      ...prev,
+      resources: [...prev.resources, { category: '', material: '', use: '' }]
+    }));
+  };
+
+  const removeResourceRow = (index: number) => {
+    setData(prev => ({
+      ...prev,
+      resources: prev.resources.filter((_, i) => i !== index)
+    }));
+  };
+
+  const handleDynamicFieldChange = (fieldName: string, value: string) => {
+    setData(prev => ({
+      ...prev,
+      dynamicFieldsValues: {
+        ...prev.dynamicFieldsValues,
+        [fieldName]: value
+      }
+    }));
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -447,25 +1280,14 @@ export default function App() {
     setError(null);
 
     try {
-      let locationInfo = "Perú (General)";
-      try {
-        const geoRes = await fetch('https://ipapi.co/json/');
-        const geoData = await geoRes.json();
-        if (geoData.country_name === 'Peru' || geoData.country === 'PE') {
-          locationInfo = `${geoData.city || ''} ${geoData.region || ''}, Perú`.trim();
-        }
-      } catch (geoErr) {
-        console.warn("No se pudo detectar la ubicación exacta:", geoErr);
-      }
-
       const prompt = `Como experto pedagogo peruano, describe el contexto de los estudiantes para una sesión de aprendizaje.
       Considera:
       - Institución Educativa: ${data.institution || 'No especificada'}
       - Nivel Educativo: ${data.level}
-      - Región/Ubicación detectada: ${locationInfo}
-      - Realidad: Basándote en el nombre de la institución y la región, describe el entorno socio-económico, necesidades de aprendizaje comunes en esa zona o tipo de colegio, e intereses típicos de estudiantes de ${data.level} en esa realidad específica del Perú.
+      - Grado: ${data.grade}
+      - Realidad: Basándote en el nombre de la institución (si existe) y el nivel educativo, describe el entorno socio-económico probable, necesidades de aprendizaje comunes en el Perú para ese nivel, e intereses típicos de estudiantes.
       - Enfoque DUA: Menciona brevemente la variabilidad del aprendizaje en este grupo.
-      Responde con un párrafo de máximo 100 palabras que sea realista, pedagógico y útil para un docente.`;
+      Responde con un párrafo de máximo 80 palabras que sea realista, pedagógico y útil para un docente.`;
 
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
@@ -482,6 +1304,25 @@ export default function App() {
     }
   };
 
+  const clearFiles = () => {
+    setData(prev => ({
+      ...prev,
+      unitFile: undefined,
+      sessionSchemaFile: undefined,
+      detectedSchema: undefined,
+      sessionTitle: '',
+      topic: '',
+      unit: '',
+      learningTable: [],
+      specialNeedsData: [],
+      moments: {
+        inicio: { activity: '', resources: '', time: '15' },
+        desarrollo: { activity: '', resources: '', time: '60' },
+        cierre: { activity: '', resources: '', time: '15' }
+      }
+    }));
+  };
+
   const generateSession = async () => {
     if (!data.topic) {
       setError("Por favor ingresa el tema específico de la sesión.");
@@ -491,9 +1332,11 @@ export default function App() {
       setError("Por favor selecciona un área curricular.");
       return;
     }
-    if (!data.aiSuggestCompetency && data.competencies.length === 0) {
-      setError("Por favor selecciona al menos una competencia o activa la sugerencia por IA.");
-      return;
+    if (mode !== 'TEMPLATE' || templateTab !== 'SUBIR') {
+      if (!data.aiSuggestCompetency && data.competencies.length === 0) {
+        setError("Por favor selecciona al menos una competencia o activa la sugerencia por IA.");
+        return;
+      }
     }
 
     setIsGenerating(true);
@@ -501,7 +1344,7 @@ export default function App() {
 
     try {
       const availableCompetencies = COMPETENCIAS_POR_AREA[data.area] || [];
-      const competencyInstruction = data.aiSuggestCompetency 
+      const competencyInstruction = (data.aiSuggestCompetency || (mode === 'TEMPLATE' && templateTab === 'SUBIR'))
         ? `Analiza el tema "${data.topic}" y el área "${data.area}" para seleccionar la competencia más pertinente de esta lista oficial: [${availableCompetencies.join(', ')}]. Justifica pedagógicamente la elección en el contenido.`
         : `Usa estas competencias seleccionadas: ${data.competencies.join(', ')}`;
 
@@ -513,25 +1356,28 @@ export default function App() {
       let templateInstruction = "";
       let contents: any = [];
 
-      if (data.templateFile) {
+      const schemaToUse = mode === 'UNIT' ? data.sessionSchemaFile : data.templateFile;
+
+      if (schemaToUse) {
         templateInstruction = `
-          IMPORTANTE: El usuario ha subido un formato específico. 
-          DEBES seguir estrictamente el esquema detectado: ${JSON.stringify(data.detectedSchema || 'Analiza el contenido adjunto')}.
-          Si el formato tiene campos adicionales o una organización diferente a la estándar, ADÁPTATE a ella.
-          Usa estos valores proporcionados por el usuario para los campos detectados:
-          ${dynamicFieldsInstruction}
-          
-          Incluye en el JSON de respuesta una propiedad "customData" que contenga los valores finales para estos campos específicos.
+          SISTEMA ULTRA-INTELIGENTE DE ADAPTACIÓN (MODO SUBIR):
+          1. El usuario ha subido un modelo/esquema de sesión. 
+          2. TU MISIÓN: Detectar internamente TODA la estructura del archivo (tablas, encabezados, secciones, pies de página).
+          3. NO muestres campos técnicos al usuario. Él solo ha proporcionado datos básicos (Docente, Institución, Nivel, Grado, Área, Tema y Propósito).
+          4. USA TU INTELIGENCIA para completar TODO el contenido pedagógico (competencias, capacidades, desempeños, criterios, evidencia, secuencia didáctica, etc.) basándote en el modelo subido.
+          5. El resultado debe ser DINÁMICO: si el modelo pide "Eje articulador", invéntalo coherentemente. Si pide "Instrumento", selecciónalo tú.
+          6. El JSON de respuesta debe ser lo más completo posible para que el generador de Word pueda reconstruir el modelo del usuario con el nuevo contenido.
+          7. Si detectas campos personalizados en el modelo, inclúyelos en una propiedad "customData" en el JSON.
         `;
         
-        if (data.templateFile.mimeType === 'text/plain') {
+        if (schemaToUse.mimeType === 'text/plain') {
           contents = [
-            { text: `Contenido del esquema (Word):\n${data.templateFile.data}` },
+            { text: `Contenido del esquema (Word):\n${schemaToUse.data}` },
             { text: `Genera la sesión siguiendo este esquema.` }
           ];
         } else {
           contents = [
-            { inlineData: { data: data.templateFile.data, mimeType: data.templateFile.mimeType } },
+            { inlineData: { data: schemaToUse.data, mimeType: schemaToUse.mimeType } },
             { text: `Genera la sesión siguiendo este formato visual.` }
           ];
         }
@@ -540,6 +1386,17 @@ export default function App() {
       const prompt = `
         Genera una sesión de aprendizaje completa para el nivel ${data.level} en Perú, siguiendo la estructura del CNEB.
         ${templateInstruction}
+        
+        IDENTIDAD DEL DOCENTE:
+        - Género del docente: ${data.teacherGender === 'male' ? 'Masculino (El profesor / El docente)' : 'Femenino (La profesora / La docente)'}
+        - IMPORTANTE: Mantén la concordancia de género en toda la sesión de forma natural y fluida.
+        - EVITA LA REDUNDANCIA: No repitas "el docente" o "la profesora" en cada párrafo. Usa sujetos tácitos, pronombres o variaciones naturales para que el texto sea profesional y directo, tal como se generaba anteriormente.
+        - NO incluyas el nombre propio ("${data.teacherName}") dentro del desarrollo de las actividades.
+        
+        ESTUDIANTES CON NEE (CRÍTICO):
+        - Lista de estudiantes: ${data.specialNeeds.map(s => `${s.name} (${s.condition})`).join(', ') || 'Ninguno'}
+        - Si hay estudiantes con NEE, debes generar una estrategia específica para cada uno dentro de la sesión, detallando cómo el docente ajustará consignas, tiempos y materiales.
+        
         Datos:
         - Área: ${data.area}
         - Grado: ${data.grade}
@@ -548,7 +1405,7 @@ export default function App() {
         - Competencias Transversales: ${data.transversalCompetencies.length > 0 ? data.transversalCompetencies.join(', ') : 'Sugiérelas tú (TIC o Autonomía)'}
         - Enfoques Transversales: ${data.transversalApproaches.length > 0 ? data.transversalApproaches.join(', ') : 'Sugiérelos tú según el tema'}
         - Contexto: ${data.studentContext}
-        - Propósito de la Unidad (Alineación): ${data.unitPurpose || 'No especificado'}
+        - Propósito de Aprendizaje (Alineación): ${data.learningPurposeMode === 'manual' ? data.manualLearningPurpose : 'Sugiérelo tú basándote en las competencias seleccionadas para esta sesión.'}
         - Enfoque Inclusión 2026: ${data.inclusion2026 !== 'Ninguno' ? data.inclusion2026 : 'No especificado'}
         - Recursos 2026: ${data.resources2026 === 'Escribir o redactar (personalizado)' ? data.resources2026Custom : (data.resources2026 !== 'Ninguno' ? data.resources2026 : 'No especificado')}
         - Diversidad 2026: ${data.diversity2026 === 'Escribir o redactar (personalizado)' ? data.diversity2026Custom : (data.diversity2026 !== 'Ninguno' ? data.diversity2026 : 'No especificado')}
@@ -568,22 +1425,23 @@ export default function App() {
             {
               "competency": "Nombre de la competencia",
               "capacities": ["Capacidad 1", "Capacidad 2"],
+              "desempeño_precisado": "Desempeño precisado para esta sesión",
               "criteria": ["Criterio 1", "Criterio 2"],
               "instruments": ["Lista de cotejo", "Rúbrica"],
-              "evidence": "Evidencia de aprendizaje esperada"
+              "evidence": "Evidencia de aprendizaje (Producto)"
             }
           ],
           "transversalCompetencies": [
             {
               "competency": "Nombre de la competencia transversal",
               "capacities": ["Capacidad 1", "Capacidad 2"],
-              "criteria": ["Criterio 1", "Criterio 2"],
-              "instruments": ["Lista de cotejo"],
-              "evidence": "Descripción detallada de la evidencia transversal"
+              "desempeño_precisado": "Desempeño precisado transversal",
+              "evidence": "Descripción de cómo se evidencia el aprendizaje",
+              "instruments": ["Lista de cotejo"]
             }
           ],
           "transversalApproaches": [
-            { "approach": "Enfoque", "value": "Valor", "attitude": "Actitud observable", "evidence": "Cuándo se evidencia" }
+            { "approach": "Enfoque", "actions": "Acciones observables" }
           ],
           "didacticSequence": {
             "inicio": [
@@ -635,7 +1493,10 @@ export default function App() {
               { "criterion": "Criterio de evaluación", "indicator": "Lo logré / Estoy en proceso" }
             ]
           },
-          "customData": {} 
+          "customData": {},
+          "specialNeedsActivities": [
+            { "studentName": "Nombre del alumno", "condition": "Condición", "strategy": "Descripción detallada de la actividad/ajuste dentro de la sesión" }
+          ]
         }
         Asegúrate de que el contenido sea pedagógicamente sólido y adaptado al grado.
         IMPORTANTE (Lineamientos MINEDU):
@@ -662,7 +1523,37 @@ export default function App() {
 
       const content = JSON.parse(response.text || '{}');
       setGeneratedContent(content);
-      setData(prev => ({ ...prev, sessionTitle: content.sessionTitle }));
+      
+      // Map AI response to structured state for editing
+      setData(prev => ({ 
+        ...prev, 
+        sessionTitle: content.sessionTitle || prev.sessionTitle,
+        unitPurpose: content.purpose?.summary || prev.unitPurpose,
+        learningTable: content.learningTable || [],
+        transversalCompetencyData: content.transversalCompetencies || [],
+        transversalApproachData: content.transversalApproaches || [],
+        learningGuide: content.learningGuide || null,
+        applicationSheet: content.applicationSheet || null,
+        resources: content.resources || [],
+        specialNeedsData: content.specialNeedsActivities || [],
+        moments: {
+          inicio: { 
+            activity: content.didacticSequence?.inicio?.map((p: any) => `${p.process}: ${p.activities}`).join('\n\n') || '',
+            resources: content.didacticSequence?.inicio?.map((p: any) => p.resources).filter(Boolean).join(', ') || '',
+            time: '15'
+          },
+          desarrollo: { 
+            activity: content.didacticSequence?.desarrollo?.map((p: any) => `${p.process}: ${p.activities}`).join('\n\n') || '',
+            resources: content.didacticSequence?.desarrollo?.map((p: any) => p.resources).filter(Boolean).join(', ') || '',
+            time: '60'
+          },
+          cierre: { 
+            activity: content.didacticSequence?.cierre?.map((p: any) => `${p.process}: ${p.activities}`).join('\n\n') || '',
+            resources: content.didacticSequence?.cierre?.map((p: any) => p.resources).filter(Boolean).join(', ') || '',
+            time: '15'
+          }
+        }
+      }));
     } catch (err) {
       console.error(err);
       setError("Error al generar la sesión. Inténtalo de nuevo.");
@@ -674,484 +1565,508 @@ export default function App() {
   const downloadWord = async () => {
     if (!generatedContent) return;
 
-    const doc = new Document({
-      sections: [{
-        properties: {},
+    const children: any[] = [];
+
+    // HEADER WITH LOGO
+    if (data.schoolLogo) {
+      try {
+        const logoBuffer = await fetch(data.schoolLogo).then(res => res.arrayBuffer());
+        children.push(
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            borders: TableBorders.NONE,
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: [
+                      new Paragraph({
+                        children: [
+                          new ImageRun({
+                            data: logoBuffer,
+                            transformation: { width: 60, height: 60 },
+                          } as any),
+                        ],
+                      }),
+                    ],
+                    width: { size: 20, type: WidthType.PERCENTAGE },
+                  }),
+                  new TableCell({
+                    children: [
+                      new Paragraph({
+                        children: [new TextRun({ text: data.institution.toUpperCase(), bold: true, size: 24 })],
+                        alignment: AlignmentType.CENTER,
+                      }),
+                      new Paragraph({
+                        children: [new TextRun({ text: "SESIÓN DE APRENDIZAJE - 2026", bold: true, size: 20 })],
+                        alignment: AlignmentType.CENTER,
+                      }),
+                    ],
+                    width: { size: 80, type: WidthType.PERCENTAGE },
+                    verticalAlign: VerticalAlign.CENTER,
+                  }),
+                ],
+              }),
+            ],
+          })
+        );
+      } catch (e) {
+        console.error("Error loading logo for Word:", e);
+      }
+    } else {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: data.institution.toUpperCase(), bold: true, size: 24 })],
+          alignment: AlignmentType.CENTER,
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: "SESIÓN DE APRENDIZAJE - 2026", bold: true, size: 20 })],
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 200 },
+        })
+      );
+    }
+
+    children.push(
+      new Paragraph({
         children: [
+          new TextRun({ text: "TÍTULO: ", bold: true }),
+          new TextRun({ text: (data.sessionTitle || data.topic || generatedContent?.sessionTitle || "").toUpperCase(), underline: {} })
+        ],
+        spacing: { before: 200, after: 100 },
+      }),
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        rows: [
+          new TableRow({
+            children: [
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DOCENTE", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "GRADO", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "UNIDAD", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Nº SESIÓN", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "FECHA", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "TIEMPO", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+            ],
+          }),
+      new TableRow({
+        children: [
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: (data.teacherName || "").toUpperCase(), size: 18 })], alignment: AlignmentType.CENTER })] }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: (data.grade || "").toUpperCase(), size: 18 })], alignment: AlignmentType.CENTER })] }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: (data.unit || "").toUpperCase(), size: 18 })], alignment: AlignmentType.CENTER })] }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: (data.sessionNumber || "").toUpperCase(), size: 18 })], alignment: AlignmentType.CENTER })] }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: (data.date || "").toUpperCase(), size: 18 })], alignment: AlignmentType.CENTER })] }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `${data.duration || "90"} min`, size: 18 })], alignment: AlignmentType.CENTER })] }),
+        ],
+      }),
+        ],
+      }),
+      new Paragraph({ spacing: { before: 200 } })
+    );
+
+    // PROPÓSITOS DE APRENDIZAJE TABLE (Image 1 style)
+    const learningRows = [
+      // Main Header
+      new TableRow({
+        children: [
+          new TableCell({ 
+            children: [new Paragraph({ children: [new TextRun({ text: "PROPÓSITOS DE APRENDIZAJE", bold: true })], alignment: AlignmentType.CENTER })], 
+            columnSpan: 4,
+            shading: { fill: "f3f4f6" }
+          }),
+        ],
+      }),
+      // Sub Header 1
+      new TableRow({
+        children: [
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "COMPETENCIA/ CAPACIDAD", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DESEMPEÑO PRECISADO", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "EVIDENCIAS DE APRENDIZAJE Producto", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "INSTRUMENTO EVALUACIÓN", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+        ],
+      }),
+      // Main Competencies Data
+      ...data.learningTable.map(row => new TableRow({
+        children: [
+          new TableCell({ 
+            children: [
+              new Paragraph({ children: [new TextRun({ text: row.competency || "", bold: true, size: 18 })] }),
+              ...(Array.isArray(row.capacities) ? row.capacities : [row.capacities]).filter(Boolean).map((c: string) => new Paragraph({ children: [new TextRun({ text: c || "", size: 16 })], bullet: { level: 0 } }))
+            ] 
+          }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: row.desempeño_precisado || "", size: 18 })] })] }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: row.evidence || "", size: 18 })] })] }),
+          new TableCell({ children: (Array.isArray(row.instruments) ? row.instruments : [row.instruments]).filter(Boolean).map((i: string) => new Paragraph({ children: [new TextRun({ text: i || "", size: 18 })] })) }),
+        ],
+      })),
+      // Transversal Header
+      new TableRow({
+        children: [
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "COMPETENCIA TRANSV/ CAPACIDAD", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DESEMPEÑO PRECISADO", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "¿Cómo se evidencia el aprendizaje?", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "INSTRUMENTO", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" } }),
+        ],
+      }),
+      // Transversal Data
+      ...(data.transversalCompetencyData.length > 0 ? data.transversalCompetencyData : [{ competency: "Gestiona su aprendizaje de manera autónoma", capacities: ["Define metas de aprendizaje"], desempeño_precisado: "Comprende la importancia de los procedimientos que le permitan lograr una meta.", evidence: "Define metas personales respaldándose en sus potencialidades.", instruments: ["Lista de cotejo"] }]).map(row => new TableRow({
+        children: [
+          new TableCell({ 
+            children: [
+              new Paragraph({ children: [new TextRun({ text: row.competency || "", bold: true, size: 18 })] }),
+              ...(Array.isArray(row.capacities) ? row.capacities : [row.capacities]).filter(Boolean).map((c: string) => new Paragraph({ children: [new TextRun({ text: c || "", size: 16 })], bullet: { level: 0 } }))
+            ] 
+          }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: row.desempeño_precisado || "", size: 18 })] })] }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: row.evidence || "", size: 18 })] })] }),
+          new TableCell({ children: (Array.isArray(row.instruments) ? row.instruments : [row.instruments]).filter(Boolean).map((i: string) => new Paragraph({ children: [new TextRun({ text: i || "", size: 18 })] })) }),
+        ],
+      })),
+      // Enfoque Header
+      new TableRow({
+        children: [
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "ENFOQUE TRANSVERSAL", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" }, columnSpan: 1 }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "ACCIONES", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" }, columnSpan: 3 }),
+        ],
+      }),
+      // Enfoque Data
+      ...(data.transversalApproachData.length > 0 ? data.transversalApproachData : [{ approach: "Enfoque de Derechos", actions: "Los docentes promueven el conocimiento de los Derechos Humanos." }]).map(row => new TableRow({
+        children: [
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: row.approach, size: 18 })] })], columnSpan: 1 }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: row.actions, size: 18 })] })], columnSpan: 3 }),
+        ],
+      })),
+    ];
+
+    children.push(
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        rows: learningRows,
+      })
+    );
+
+    // IV. MOMENTOS
+    children.push(
+      new Paragraph({
+        children: [new TextRun({ text: "IV. MOMENTOS DE LA SESIÓN", bold: true, color: "1a5f7a" })],
+        spacing: { before: 400, after: 100 },
+      }),
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        rows: [
+          new TableRow({
+            children: [
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "MOMENTOS", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" }, width: { size: 15, type: WidthType.PERCENTAGE } }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "ACTIVIDADES", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" }, width: { size: 60, type: WidthType.PERCENTAGE } }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "RECURSOS", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" }, width: { size: 15, type: WidthType.PERCENTAGE } }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "TIEMPO", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], shading: { fill: "f3f4f6" }, width: { size: 10, type: WidthType.PERCENTAGE } }),
+            ],
+          }),
+          new TableRow({
+            children: [
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "INICIO", bold: true, size: 18 })] })] }),
+              new TableCell({ children: data.moments.inicio.activity.split('\n').map(line => new Paragraph({ children: [new TextRun({ text: line, size: 18 })] })) }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: data.moments.inicio.resources, size: 18 })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `${data.moments.inicio.time} min`, size: 18 })] })] }),
+            ],
+          }),
+          new TableRow({
+            children: [
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DESARROLLO", bold: true, size: 18 })] })] }),
+              new TableCell({ children: data.moments.desarrollo.activity.split('\n').map(line => new Paragraph({ children: [new TextRun({ text: line, size: 18 })] })) }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: data.moments.desarrollo.resources, size: 18 })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `${data.moments.desarrollo.time} min`, size: 18 })] })] }),
+            ],
+          }),
+          new TableRow({
+            children: [
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "CIERRE", bold: true, size: 18 })] })] }),
+              new TableCell({ children: data.moments.cierre.activity.split('\n').map(line => new Paragraph({ children: [new TextRun({ text: line, size: 18 })] })) }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: data.moments.cierre.resources, size: 18 })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `${data.moments.cierre.time} min`, size: 18 })] })] }),
+            ],
+          }),
+        ],
+      })
+    );
+
+    // VII. ESTUDIANTES CON NEE
+    if (data.specialNeedsData && data.specialNeedsData.length > 0) {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: "VII. ESTUDIANTE CON NECESIDADES EDUCATIVAS ESPECIALES (NEE)", bold: true, color: "1a5f7a" })],
+          spacing: { before: 400, after: 100 },
+        }),
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({ 
+                  children: [new Paragraph({ children: [new TextRun({ text: "NOMBRE DEL ALUMNO", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], 
+                  shading: { fill: "1a5f7a" },
+                  width: { size: 30, type: WidthType.PERCENTAGE }
+                }),
+                new TableCell({ 
+                  children: [new Paragraph({ children: [new TextRun({ text: "ACTIVIDAD DENTRO DE LA SESIÓN", bold: true, size: 18 })], alignment: AlignmentType.CENTER })], 
+                  shading: { fill: "1a5f7a" },
+                  width: { size: 70, type: WidthType.PERCENTAGE }
+                }),
+              ],
+            }),
+            ...data.specialNeedsData.map((item: any) => new TableRow({
+              children: [
+                new TableCell({ 
+                  children: [new Paragraph({ children: [new TextRun({ text: `${item.studentName || ""} — ${item.condition || ""}`, size: 18 })] })],
+                  shading: { fill: "f3f4f6" }
+                }),
+                new TableCell({ 
+                  children: [new Paragraph({ children: [new TextRun({ text: item.strategy || "", size: 18 })] })] 
+                }),
+              ],
+            }))
+          ]
+        })
+      );
+    }
+
+    // VII. GUÍA DE ACTIVIDADES DE APRENDIZAJE
+    if (data.generateActivities && data.learningGuide) {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: "VII. GUÍA DE ACTIVIDADES DE APRENDIZAJE", bold: true, color: "1a5f7a" })],
+          spacing: { before: 400, after: 100 },
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: data.learningGuide.title, bold: true, size: 24 })],
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 200 }
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: data.learningGuide.introduction, italics: true })],
+          spacing: { after: 300 }
+        })
+      );
+
+      data.learningGuide.steps.forEach((step: any) => {
+        children.push(
           new Paragraph({
-            text: "SESIÓN DE APRENDIZAJE",
-            heading: HeadingLevel.HEADING_1,
-            alignment: AlignmentType.CENTER,
+            children: [
+              new TextRun({ text: `Paso ${step.stepNumber}: ${step.title}`, bold: true, color: "1a5f7a" })
+            ],
+            spacing: { before: 200, after: 100 }
           }),
           new Paragraph({
             children: [
-              new TextRun({
-                text: `"${(data.sessionTitle || data.topic || generatedContent.sessionTitle).toUpperCase()}"`,
-                bold: true,
-                size: 28,
-                color: "1a5f7a",
-              })
+              new TextRun({ text: "Proceso Didáctico: ", bold: true }),
+              new TextRun({ text: step.didacticProcess })
             ],
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 400 },
+            spacing: { after: 100 }
           }),
-
-          // I. DATOS INFORMATIVOS
           new Paragraph({
-            children: [new TextRun({ text: "I. DATOS INFORMATIVOS", bold: true, color: "1a5f7a" })],
-            spacing: { before: 200, after: 100 },
-          }),
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            margins: { top: 100, bottom: 100, left: 100, right: 100 },
-            rows: [
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "DOCENTE:", bold: true, color: "FFFFFF" })] })], 
-                    width: { size: 25, type: WidthType.PERCENTAGE },
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(data.teacherName)], width: { size: 75, type: WidthType.PERCENTAGE } }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "INSTITUCIÓN:", bold: true, color: "FFFFFF" })] })],
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(data.institution)] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "ÁREA:", bold: true, color: "FFFFFF" })] })],
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(data.area)] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "GRADO/SECCIÓN:", bold: true, color: "FFFFFF" })] })],
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(data.grade)] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "UNIDAD:", bold: true, color: "FFFFFF" })] })],
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(data.unit)] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "Nº SESIÓN:", bold: true, color: "FFFFFF" })] })],
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(data.sessionNumber)] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "FECHA:", bold: true, color: "FFFFFF" })] })],
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(data.date)] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "TIEMPO:", bold: true, color: "FFFFFF" })] })],
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(`${data.duration} minutos`)] }),
-                ],
-              }),
+            children: [
+              new TextRun({ text: "Instrucciones: ", bold: true }),
+              new TextRun({ text: step.instructions })
             ],
+            spacing: { after: 100 }
           }),
-
-          // II. PROPÓSITO
           new Paragraph({
-            children: [new TextRun({ text: "II. PROPÓSITO DE LA SESIÓN", bold: true, color: "1a5f7a" })],
-            spacing: { before: 400, after: 100 },
+            text: step.detailedActivity,
+            spacing: { after: 100 }
           }),
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            margins: { top: 100, bottom: 100, left: 100, right: 100 },
-            rows: [
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "Intención pedagógica", bold: true, color: "FFFFFF" })] })], 
-                    width: { size: 30, type: WidthType.PERCENTAGE },
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(generatedContent.purpose.pedagogicalIntention)], width: { size: 70, type: WidthType.PERCENTAGE } }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "Relación con la situación significativa", bold: true, color: "FFFFFF" })] })],
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(generatedContent.purpose.significantSituationRelation)] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "Relación con el desarrollo integral", bold: true, color: "FFFFFF" })] })],
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(generatedContent.purpose.integralDevelopmentRelation)] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ 
-                    children: [new Paragraph({ children: [new TextRun({ text: "Propósito resumido", bold: true, color: "FFFFFF" })] })],
-                    shading: { fill: "1a5f7a" }
-                  }),
-                  new TableCell({ children: [new Paragraph(generatedContent.purpose.summary)] }),
-                ],
-              }),
-            ],
-          }),
-
-          // III. COMPETENCIAS
           new Paragraph({
-            children: [new TextRun({ text: "III. COMPETENCIA, CAPACIDADES, CRITERIOS DE EVALUACIÓN, INSTRUMENTOS Y EVIDENCIAS DE APRENDIZAJE", bold: true, color: "1a5f7a" })],
-            spacing: { before: 400, after: 100 },
-          }),
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            margins: { top: 100, bottom: 100, left: 100, right: 100 },
-            rows: [
-              new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "COMPETENCIA", bold: true, color: "FFFFFF" })] })], shading: { fill: "1a5f7a" } }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "CAPACIDADES", bold: true, color: "FFFFFF" })] })], shading: { fill: "1a5f7a" } }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "CRITERIOS", bold: true, color: "FFFFFF" })] })], shading: { fill: "1a5f7a" } }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "INSTRUMENTOS", bold: true, color: "FFFFFF" })] })], shading: { fill: "1a5f7a" } }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "EVIDENCIA", bold: true, color: "FFFFFF" })] })], shading: { fill: "1a5f7a" } }),
-                ],
-              }),
-              ...generatedContent.learningTable.map((row: any) => new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: row.competency, bold: true })] })], shading: { fill: "f0f7f9" } }),
-                  new TableCell({ children: row.capacities.map((c: string) => new Paragraph(`- ${c}`)) }),
-                  new TableCell({ children: row.criteria.map((c: string) => new Paragraph(`- ${c}`)) }),
-                  new TableCell({ children: (row.instruments || [data.instrument]).map((i: string) => new Paragraph(`- ${i}`)) }),
-                  new TableCell({ children: [new Paragraph(row.evidence)] }),
-                ],
-              })),
-              ...(generatedContent.transversalCompetencies || []).map((row: any) => new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: row.competency, bold: true })] })], shading: { fill: "f0f7f9" } }),
-                  new TableCell({ children: row.capacities.map((c: string) => new Paragraph(`- ${c}`)) }),
-                  new TableCell({ children: row.criteria.map((c: string) => new Paragraph(`- ${c}`)) }),
-                  new TableCell({ children: (row.instruments || [data.instrument]).map((i: string) => new Paragraph(`- ${i}`)) }),
-                  new TableCell({ children: [new Paragraph(row.evidence || "Se evidencia en el desarrollo de la sesión")] }),
-                ],
-              })),
+            children: [
+              new TextRun({ text: "Recursos: ", bold: true, size: 18 }),
+              new TextRun({ text: step.resources, size: 18 })
             ],
-          }),
+            spacing: { after: 200 }
+          })
+        );
+      });
 
-          // IV. ENFOQUES TRANSVERSALES
-          new Paragraph({
-            children: [new TextRun({ text: "IV. ENFOQUES TRANSVERSALES", bold: true, color: "1a5f7a" })],
-            spacing: { before: 400, after: 100 },
-          }),
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            margins: { top: 100, bottom: 100, left: 100, right: 100 },
-            rows: [
-              new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "ENFOQUE", bold: true, color: "FFFFFF" })] })], shading: { fill: "1a5f7a" } }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "VALOR", bold: true, color: "FFFFFF" })] })], shading: { fill: "1a5f7a" } }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "ACTITUD OBSERVABLE", bold: true, color: "FFFFFF" })] })], shading: { fill: "1a5f7a" } }),
-                ],
-              }),
-              ...(generatedContent.transversalApproaches || []).map((row: any) => new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph(row.approach)] }),
-                  new TableCell({ children: [new Paragraph(row.value)] }),
-                  new TableCell({ children: [new Paragraph(row.attitude)] }),
-                ],
-              })),
-            ],
-          }),
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({ text: "PRODUCTO / EVIDENCIA FINAL: ", bold: true, color: "1a5f7a" }),
+            new TextRun({ text: data.learningGuide.finalProduct, bold: true })
+          ],
+          spacing: { before: 300, after: 200 }
+        })
+      );
+    }
 
-          // V. OPCIONES 2026
-          ...(data.inclusion2026 !== 'Ninguno' || data.resources2026 !== 'Ninguno' || data.diversity2026 !== 'Ninguno' ? [
-            new Paragraph({
-              children: [new TextRun({ text: "V. OPCIONES 2026 (INCLUSIÓN, DIVERSIDAD Y RECURSOS)", bold: true, color: "1a5f7a" })],
-              spacing: { before: 400, after: 100 },
-            }),
-            new Table({
-              width: { size: 100, type: WidthType.PERCENTAGE },
-              margins: { top: 100, bottom: 100, left: 100, right: 100 },
-              rows: [
-                new TableRow({
-                  children: [
-                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "CATEGORÍA", bold: true, color: "FFFFFF" })] })], shading: { fill: "1a5f7a" } }),
-                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DETALLE / SELECCIÓN", bold: true, color: "FFFFFF" })] })], shading: { fill: "1a5f7a" } }),
-                  ],
-                }),
-                ...(data.inclusion2026 !== 'Ninguno' ? [
-                  new TableRow({
-                    children: [
-                      new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Enfoque inclusión y participación", bold: true })] })] }),
-                      new TableCell({ children: [new Paragraph(data.inclusion2026 || '')] }),
-                    ],
-                  })
-                ] : []),
-                ...(data.resources2026 !== 'Ninguno' ? [
-                  new TableRow({
-                    children: [
-                      new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Recursos y referencias", bold: true })] })] }),
-                      new TableCell({ children: [new Paragraph(data.resources2026 === 'Escribir o redactar (personalizado)' ? (data.resources2026Custom || '') : (data.resources2026 || ''))] }),
-                    ],
-                  })
-                ] : []),
-                ...(data.diversity2026 !== 'Ninguno' ? [
-                  new TableRow({
-                    children: [
-                      new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Consideraciones de diversidad", bold: true })] })] }),
-                      new TableCell({ children: [new Paragraph(data.diversity2026 === 'Escribir o redactar (personalizado)' ? (data.diversity2026Custom || '') : (data.diversity2026 || ''))] }),
-                    ],
-                  })
-                ] : []),
-              ],
-            })
-          ] : []),
+    // VIII. INSTRUMENTO DE EVALUACIÓN
+    children.push(
+      new Paragraph({
+        children: [new TextRun({ text: `VIII. INSTRUMENTO DE EVALUACIÓN: ${data.instrument.toUpperCase()}`, bold: true })],
+        spacing: { before: 400, after: 100 },
+      })
+    );
 
-          // VI. SECUENCIA
-          new Paragraph({
-            children: [new TextRun({ text: "VI. SECUENCIA DIDÁCTICA", bold: true, color: "1a5f7a" })],
-            spacing: { before: 400, after: 100 },
-          }),
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            margins: { top: 100, bottom: 100, left: 100, right: 100 },
-            rows: [
-              new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "MOMENTOS", bold: true, color: "FFFFFF" })] })], width: { size: 15, type: WidthType.PERCENTAGE }, shading: { fill: "1a5f7a" } }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "ACTIVIDADES/ESTRATEGIAS", bold: true, color: "FFFFFF" })] })], width: { size: 65, type: WidthType.PERCENTAGE }, shading: { fill: "1a5f7a" } }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "RECURSOS", bold: true, color: "FFFFFF" })] })], width: { size: 20, type: WidthType.PERCENTAGE }, shading: { fill: "1a5f7a" } }),
-                ],
-              }),
-              // INICIO
-              ...(generatedContent.didacticSequence.inicio || []).map((item: any, idx: number) => new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: idx === 0 ? "INICIO" : "", bold: true })] })], shading: { fill: "f0f7f9" } }),
-                  new TableCell({ children: [
-                    new Paragraph({ children: [new TextRun({ text: item.process, bold: true })] }),
-                    new Paragraph({ text: item.activities, spacing: { before: 100 } })
-                  ] }),
-                  new TableCell({ children: [new Paragraph(item.resources)] }),
-                ],
-              })),
-              // DESARROLLO
-              ...(generatedContent.didacticSequence.desarrollo || []).map((item: any, idx: number) => new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: idx === 0 ? "DESARROLLO" : "", bold: true })] })], shading: { fill: "f0f7f9" } }),
-                  new TableCell({ children: [
-                    new Paragraph({ children: [new TextRun({ text: item.process, bold: true })] }),
-                    new Paragraph({ text: item.activities, spacing: { before: 100 } })
-                  ] }),
-                  new TableCell({ children: [new Paragraph(item.resources)] }),
-                ],
-              })),
-              // CIERRE
-              ...(generatedContent.didacticSequence.cierre || []).map((item: any, idx: number) => new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: idx === 0 ? "CIERRE" : "", bold: true })] })], shading: { fill: "f0f7f9" } }),
-                  new TableCell({ children: [
-                    new Paragraph({ children: [new TextRun({ text: item.process, bold: true })] }),
-                    new Paragraph({ text: item.activities, spacing: { before: 100 } })
-                  ] }),
-                  new TableCell({ children: [new Paragraph(item.resources)] }),
-                ],
-              })),
-            ],
-          }),
-
-          // VII. GUÍA DE ACTIVIDADES DE APRENDIZAJE
-          ...(data.generateActivities && generatedContent.learningGuide ? [
-            new Paragraph({
-              children: [new TextRun({ text: "VII. GUÍA DE ACTIVIDADES DE APRENDIZAJE", bold: true, color: "1a5f7a" })],
-              spacing: { before: 400, after: 100 },
-            }),
-            new Paragraph({
-              children: [new TextRun({ text: generatedContent.learningGuide.title, bold: true, size: 24 })],
-              alignment: AlignmentType.CENTER,
-              spacing: { after: 200 }
-            }),
-            new Paragraph({
-              children: [new TextRun({ text: generatedContent.learningGuide.introduction, italics: true })],
-              spacing: { after: 300 }
-            }),
-            ...generatedContent.learningGuide.steps.map((step: any) => [
-              new Paragraph({
-                children: [
-                  new TextRun({ text: `Paso ${step.stepNumber}: ${step.title}`, bold: true, color: "1a5f7a" })
-                ],
-                spacing: { before: 200, after: 100 }
-              }),
-              new Paragraph({
-                children: [
-                  new TextRun({ text: "Proceso Didáctico: ", bold: true }),
-                  new TextRun({ text: step.didacticProcess })
-                ],
-                spacing: { after: 100 }
-              }),
-              new Paragraph({
-                children: [
-                  new TextRun({ text: "Instrucciones: ", bold: true }),
-                  new TextRun({ text: step.instructions })
-                ],
-                spacing: { after: 100 }
-              }),
-              new Paragraph({
-                text: step.detailedActivity,
-                spacing: { after: 100 }
-              }),
-              new Paragraph({
-                children: [
-                  new TextRun({ text: "Recursos: ", bold: true, size: 18 }),
-                  new TextRun({ text: step.resources, size: 18 })
-                ],
-                spacing: { after: 200 }
-              })
-            ]).flat(),
-            new Paragraph({
+    if (data.studentList.trim()) {
+      children.push(
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          margins: { top: 100, bottom: 100, left: 100, right: 100 },
+          rows: [
+            new TableRow({
               children: [
-                new TextRun({ text: "PRODUCTO / EVIDENCIA FINAL: ", bold: true, color: "1a5f7a" }),
-                new TextRun({ text: generatedContent.learningGuide.finalProduct, bold: true })
-              ],
-              spacing: { before: 300, after: 200 }
-            })
-          ] : []),
-
-          // VIII. INSTRUMENTO DE EVALUACIÓN
-          new Paragraph({
-            children: [new TextRun({ text: `VIII. INSTRUMENTO DE EVALUACIÓN: ${data.instrument.toUpperCase()}`, bold: true })],
-            spacing: { before: 400, after: 100 },
-          }),
-          ...(data.studentList.trim() ? [
-            new Table({
-              width: { size: 100, type: WidthType.PERCENTAGE },
-              margins: { top: 100, bottom: 100, left: 100, right: 100 },
-              rows: [
-                new TableRow({
-                  children: [
-                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "N°", bold: true })] })], width: { size: 5, type: WidthType.PERCENTAGE } }),
-                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Apellidos y Nombres", bold: true })] })], width: { size: 45, type: WidthType.PERCENTAGE } }),
-                    ...generatedContent.learningTable[0]?.criteria.slice(0, 3).map((_: any, idx: number) => 
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "N°", bold: true })] })], width: { size: 5, type: WidthType.PERCENTAGE } }),
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Apellidos y Nombres", bold: true })] })], width: { size: 45, type: WidthType.PERCENTAGE } }),
+                ...(data.learningTable[0]?.criteria && Array.isArray(data.learningTable[0].criteria) 
+                  ? data.learningTable[0].criteria.slice(0, 3).map((_: any, idx: number) => 
                       new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `Criterio ${idx + 1}`, bold: true })] })], width: { size: 15, type: WidthType.PERCENTAGE } })
-                    ) || []
-                  ],
-                }),
-                ...data.studentList.split('\n').filter(name => name.trim()).map((name, idx) => new TableRow({
-                  children: [
-                    new TableCell({ children: [new Paragraph((idx + 1).toString())] }),
-                    new TableCell({ children: [new Paragraph(name.trim())] }),
-                    ...Array(Math.min(generatedContent.learningTable[0]?.criteria.length || 0, 3)).fill(0).map(() => 
-                      new TableCell({ children: [new Paragraph("")] })
-                    )
-                  ],
-                })),
+                    ) 
+                  : [])
               ],
-            })
-          ] : [
-            new Paragraph("Se adjunta el instrumento seleccionado para la evaluación de las evidencias de aprendizaje.")
-          ]),
+            }),
+            ...data.studentList.split('\n').filter(name => name.trim()).map((name, idx) => new TableRow({
+              children: [
+                new TableCell({ children: [new Paragraph((idx + 1).toString())] }),
+                new TableCell({ children: [new Paragraph(name.trim())] }),
+                ...Array(Math.min(Array.isArray(data.learningTable[0]?.criteria) ? data.learningTable[0].criteria.length : 0, 3)).fill(0).map(() => 
+                  new TableCell({ children: [new Paragraph("")] })
+                )
+              ],
+            })),
+          ],
+        })
+      );
+    } else {
+      children.push(new Paragraph("Se adjunta el instrumento seleccionado para la evaluación de las evidencias de aprendizaje."));
+    }
 
-          // IX. FICHA DE APLICACIÓN (GUÍA DE PRÁCTICA)
-          ...(data.generateApplication && generatedContent.applicationSheet ? [
-            new Paragraph({
-              children: [new TextRun({ text: "IX. FICHA DE APLICACIÓN (GUÍA DE PRÁCTICA)", bold: true, color: "1a5f7a" })],
-              spacing: { before: 400, after: 100 },
-            }),
-            new Paragraph({
-              children: [new TextRun({ text: generatedContent.applicationSheet.title, bold: true, size: 24 })],
-              alignment: AlignmentType.CENTER,
-              spacing: { after: 200 }
-            }),
-            new Paragraph({
-              children: [new TextRun({ text: "Situación Contextualizada:", bold: true })],
-              spacing: { after: 100 }
-            }),
-            new Paragraph({
-              text: generatedContent.applicationSheet.contextualizedSituation,
-              spacing: { after: 200 }
-            }),
-            ...generatedContent.applicationSheet.activities.map((activity: any, idx: number) => [
-              new Paragraph({
-                children: [
-                  new TextRun({ text: `Actividad ${idx + 1}: ${activity.title}`, bold: true, color: "1a5f7a" })
-                ],
-                spacing: { before: 200, after: 100 }
-              }),
-              new Paragraph({
-                children: [
-                  new TextRun({ text: "Instrucciones: ", bold: true }),
-                  new TextRun({ text: activity.instructions })
-                ],
-                spacing: { after: 100 }
-              }),
-              new Paragraph({
-                text: activity.content,
-                spacing: { after: 100 }
-              }),
-              new Paragraph({
-                children: [
-                  new TextRun({ text: "Alineación: ", italics: true, size: 18 }),
-                  new TextRun({ text: activity.alignment, italics: true, size: 18 })
-                ],
-                spacing: { after: 200 }
-              })
-            ]).flat(),
-            new Paragraph({
-              children: [new TextRun({ text: "AUTOEVALUACIÓN", bold: true, color: "1a5f7a" })],
-              spacing: { before: 300, after: 100 }
-            }),
-            new Table({
-              width: { size: 100, type: WidthType.PERCENTAGE },
-              rows: [
-                new TableRow({
-                  children: [
-                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Criterios de Evaluación", bold: true })] })] }),
-                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "¿Lo logré?", bold: true })] })] }),
-                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "¿Qué puedo mejorar?", bold: true })] })] }),
-                  ]
-                }),
-                ...generatedContent.applicationSheet.selfEvaluation.map((item: any) => new TableRow({
-                  children: [
-                    new TableCell({ children: [new Paragraph(item.criterion)] }),
-                    new TableCell({ children: [new Paragraph("")] }),
-                    new TableCell({ children: [new Paragraph("")] }),
-                  ]
-                }))
+    // IX. FICHA DE APLICACIÓN (GUÍA DE PRÁCTICA)
+    if (data.generateApplication && data.applicationSheet) {
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: "IX. FICHA DE APLICACIÓN (GUÍA DE PRÁCTICA)", bold: true, color: "1a5f7a" })],
+          spacing: { before: 400, after: 100 },
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: data.applicationSheet.title, bold: true, size: 24 })],
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 200 }
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: "Situación Contextualizada:", bold: true })],
+          spacing: { after: 100 }
+        }),
+        new Paragraph({
+          text: data.applicationSheet.contextualizedSituation,
+          spacing: { after: 200 }
+        })
+      );
+
+      data.applicationSheet.activities.forEach((activity: any, idx: number) => {
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: `Actividad ${idx + 1}: ${activity.title}`, bold: true, color: "1a5f7a" })
+            ],
+            spacing: { before: 200, after: 100 }
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({ text: "Instrucciones: ", bold: true }),
+              new TextRun({ text: activity.instructions })
+            ],
+            spacing: { after: 100 }
+          }),
+          new Paragraph({
+            text: activity.content,
+            spacing: { after: 100 }
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({ text: "Alineación: ", italics: true, size: 18 }),
+              new TextRun({ text: activity.alignment, italics: true, size: 18 })
+            ],
+            spacing: { after: 200 }
+          })
+        );
+      });
+
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: "AUTOEVALUACIÓN", bold: true, color: "1a5f7a" })],
+          spacing: { before: 300, after: 100 }
+        }),
+        new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Criterios de Evaluación", bold: true })] })] }),
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "¿Lo logré?", bold: true })] })] }),
+                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "¿Qué puedo mejorar?", bold: true })] })] }),
               ]
-            })
-          ] : []),
+            }),
+            ...data.applicationSheet.selfEvaluation.map((item: any) => new TableRow({
+              children: [
+                new TableCell({ children: [new Paragraph(item.criterion)] }),
+                new TableCell({ children: [new Paragraph("")] }),
+                new TableCell({ children: [new Paragraph("")] }),
+              ]
+            }))
+          ]
+        })
+      );
+    }
+
+    // X. RECURSOS
+    children.push(
+      new Paragraph({
+        children: [new TextRun({ text: "X. RECURSOS Y MATERIALES", bold: true, color: "1a5f7a" })],
+        spacing: { before: 400, after: 100 },
+      }),
+      ...data.resources.map((r: any) => new Paragraph({
+        children: [
+          new TextRun({ text: `${r.category}: `, bold: true }),
+          new TextRun({ text: `${r.material} (${r.use})` })
         ],
+        spacing: { after: 100 }
+      }))
+    );
+
+    // SIGNATURES
+    children.push(
+      new Paragraph({ spacing: { before: 800 } }),
+      new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: TableBorders.NONE,
+        rows: [
+          new TableRow({
+            children: [
+              new TableCell({
+                children: [
+                  new Paragraph({ text: "__________________________", alignment: AlignmentType.CENTER }),
+                  new Paragraph({ 
+                    children: [new TextRun({ text: data.teacherName || "Docente de Aula", bold: true })],
+                    alignment: AlignmentType.CENTER 
+                  }),
+                  new Paragraph({ text: "Docente", alignment: AlignmentType.CENTER }),
+                ],
+              }),
+              new TableCell({
+                children: [
+                  new Paragraph({ text: "__________________________", alignment: AlignmentType.CENTER }),
+                  new Paragraph({ 
+                    children: [new TextRun({ text: data.directorName || "Director(a)", bold: true })],
+                    alignment: AlignmentType.CENTER 
+                  }),
+                  new Paragraph({ text: "Director(a)", alignment: AlignmentType.CENTER }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      })
+    );
+
+    const doc = new Document({
+      sections: [{
+        properties: {},
+        children: children,
       }],
     });
 
@@ -1159,17 +2074,50 @@ export default function App() {
     saveAs(blob, `Sesion_${data.topic.replace(/\s+/g, '_')}.docx`);
   };
 
+  const resetSessionData = () => {
+    setData(prev => ({
+      ...prev,
+      sessionTitle: '',
+      topic: '',
+      area: '',
+      level: 'Primaria',
+      grade: '1er Grado',
+      unit: '',
+      sessionNumber: '',
+      studentContext: '',
+      learningPurposeMode: 'ai',
+      manualLearningPurpose: '',
+      learningTable: [],
+      transversalCompetencyData: [],
+      transversalApproaches: [],
+      moments: {
+        inicio: { activity: '', resources: '', time: '15' },
+        desarrollo: { activity: '', resources: '', time: '60' },
+        cierre: { activity: '', resources: '', time: '15' }
+      },
+      learningGuide: { title: '', sections: [] },
+      applicationSheet: { title: '', questions: [] },
+      resources: [],
+      specialNeedsData: [],
+      templateFile: undefined,
+      unitFile: undefined,
+      sessionSchemaFile: undefined,
+      detectedSchema: undefined,
+      dynamicFieldsValues: {}
+    }));
+  };
+
   const selectMode = (m: 'UNIT' | 'BOOKS' | 'FREE' | 'TEMPLATE') => {
     setMode(m);
     setView('form');
-    // Si es modo libre, limpiamos el template si existía
-    if (m === 'FREE') {
-      setData(prev => ({ ...prev, templateFile: undefined, detectedSchema: undefined }));
-    }
+    resetSessionData();
   };
 
   return (
-    <div className="min-h-screen bg-[#0f172a] text-white font-sans selection:bg-emerald-500/30 selection:text-emerald-200">
+    <div className={cn(
+      "min-h-screen font-sans transition-colors duration-500 selection:bg-emerald-500/30 selection:text-emerald-200",
+      theme === 'dark' ? "bg-[#050505] text-slate-300" : "light-theme bg-slate-50 text-slate-900"
+    )}>
       <AnimatePresence mode="wait">
         {view === 'landing' ? (
           <motion.div 
@@ -1177,83 +2125,115 @@ export default function App() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="max-w-4xl mx-auto px-6 py-20 flex flex-col items-center justify-center min-h-screen text-center"
+            className={cn(
+              "max-w-4xl mx-auto px-6 py-20 flex flex-col items-center justify-center min-h-screen text-center transition-colors duration-500",
+              theme === 'dark' ? "bg-[#050505]" : "bg-slate-50"
+            )}
           >
-            <div className="mb-8">
-              <div className="flex items-center justify-center gap-3 mb-6">
-                <div className="w-16 h-16 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-2xl shadow-emerald-500/20">
-                  <GraduationCap className="text-white w-10 h-10" />
+            {/* Floating Theme Toggle for Landing */}
+            <div className="fixed top-8 right-8 z-50">
+              <div className={cn(
+                "flex items-center gap-1 p-1 rounded-2xl border backdrop-blur-xl transition-all shadow-2xl",
+                theme === 'dark' ? "bg-white/5 border-white/10" : "bg-white/80 border-slate-200"
+              )}>
+                <button 
+                  onClick={() => setTheme('light')}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all",
+                    theme === 'light' ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "text-slate-500 hover:text-slate-900"
+                  )}
+                >
+                  <Sun size={14} /> MODO CLARO
+                </button>
+                <button 
+                  onClick={() => setTheme('dark')}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all",
+                    theme === 'dark' ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "text-slate-500 hover:text-white"
+                  )}
+                >
+                  <Moon size={14} /> MODO OSCURO
+                </button>
+              </div>
+            </div>
+
+            <div className="mb-12">
+              <div className="flex items-center justify-center gap-3 mb-8">
+                <div className="w-20 h-20 bg-emerald-500 rounded-3xl flex items-center justify-center shadow-2xl shadow-emerald-500/20 rotate-3">
+                  <GraduationCap className="text-black w-12 h-12" />
                 </div>
               </div>
-              <h1 className="text-5xl font-black tracking-tight mb-4">
+              <h1 className="text-6xl font-black tracking-tighter mb-6 leading-[0.9]">
                 Generador de Sesiones <br />
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">
-                  de Aprendizaje V-5.4
-                </span>
-                <span className="ml-4 inline-block px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-400 text-sm font-bold align-middle">
-                  CNEB 2026
+                  de Aprendizaje
                 </span>
               </h1>
-              <p className="text-gray-400 text-lg max-w-2xl mx-auto">
-                Una herramienta creada por <span className="text-emerald-400 font-semibold">Juan Caicedo</span> y potenciada por <span className="text-cyan-400 font-semibold">Gemini</span>
+              <div className="flex items-center justify-center gap-4 mb-8">
+                <span className={cn(
+                  "px-3 py-1 border rounded-full text-xs font-bold tracking-widest uppercase transition-colors",
+                  theme === 'dark' ? "bg-white/5 border-white/10 text-slate-400" : "bg-slate-100 border-slate-200 text-slate-500"
+                )}>
+                  V-5.4 • CNEB 2026
+                </span>
+              </div>
+              <p className="text-slate-500 text-lg max-w-2xl mx-auto font-light leading-relaxed">
+                Una herramienta creada por <span className="text-emerald-400/80 font-medium">Juan Caicedo</span> y potenciada por <span className="text-cyan-400/80 font-medium">Gemini AI</span>
               </p>
             </div>
 
-            <button className="inline-flex items-center gap-2 px-4 py-2 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-400 text-sm mb-12 hover:bg-slate-800 transition-colors">
-              <span className="w-4 h-4 bg-blue-500 rounded flex items-center justify-center text-[10px] text-white font-bold">i</span>
-              Novedades 2026 ▼
-            </button>
-
-            <div className="w-full bg-slate-900/40 border border-slate-800/60 rounded-[40px] p-8 md:p-12 backdrop-blur-xl shadow-2xl shadow-black/20">
-              <div className="flex flex-col md:flex-row items-center justify-center gap-4 mb-4">
-                <div className="w-10 h-10 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold shadow-lg shadow-emerald-500/20">1</div>
-                <h2 className="text-2xl md:text-3xl font-bold">¿Cómo quieres crear la sesión?</h2>
+            <div className={cn(
+              "w-full glass-panel rounded-[48px] p-8 md:p-16 shadow-2xl transition-all",
+              theme === 'dark' ? "shadow-black/50" : "shadow-slate-200"
+            )}>
+              <div className="flex flex-col items-center justify-center gap-4 mb-12">
+                <h2 className="text-3xl font-bold tracking-tight">¿Cómo quieres crear la sesión?</h2>
+                <p className="text-slate-500 text-sm">Selecciona una modalidad para comenzar tu planificación.</p>
               </div>
-              <p className="text-slate-400 mb-12 text-sm md:text-base">Cuatro formas de trabajar: elige la que mejor encaje con tu caso.</p>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <button 
                   onClick={() => selectMode('UNIT')}
-                  className="group relative flex flex-col items-center text-center p-8 rounded-3xl bg-indigo-600 hover:bg-indigo-500 transition-all duration-300 shadow-xl hover:shadow-indigo-500/20 border border-indigo-400/20"
+                  className="group relative flex flex-col items-center text-center p-8 rounded-[32px] glass-card hover:border-emerald-500/30"
                 >
-                  <div className="w-12 h-12 rounded-full border-2 border-white/30 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                    <CheckCircle2 className="text-white w-6 h-6" />
+                  <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-500">
+                    <CheckCircle2 className="text-emerald-400 w-7 h-7" />
                   </div>
                   <h3 className="text-xl font-bold mb-2">Unidad de Aprendizaje</h3>
-                  <p className="text-indigo-100/70 text-sm">Genera sesiones a partir de tu unidad ya planificada.</p>
+                  <p className="text-slate-500 text-sm leading-relaxed">Genera sesiones a partir de tu unidad ya planificada.</p>
                 </button>
 
                 <button 
                   onClick={() => selectMode('BOOKS')}
-                  className="group relative flex flex-col items-center text-center p-8 rounded-3xl bg-blue-600 hover:bg-blue-500 transition-all duration-300 shadow-xl hover:shadow-blue-500/20 border border-blue-400/20"
+                  className="group relative flex flex-col items-center text-center p-8 rounded-[32px] glass-card hover:border-blue-500/30"
                 >
-                  <div className="w-12 h-12 rounded-full border-2 border-white/30 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                    <CheckCircle2 className="text-white w-6 h-6" />
+                  <div className="w-14 h-14 rounded-2xl bg-blue-500/10 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-500">
+                    <CheckCircle2 className="text-blue-400 w-7 h-7" />
                   </div>
                   <h3 className="text-xl font-bold mb-2">Libros del Estado</h3>
-                  <p className="text-blue-100/70 text-sm">Genera Matemática y Comunicación si usas los libros del Estado.</p>
+                  <p className="text-slate-500 text-sm leading-relaxed">Genera Matemática y Comunicación si usas los libros del Estado.</p>
                 </button>
 
                 <button 
                   onClick={() => selectMode('FREE')}
-                  className="group relative flex flex-col items-center text-center p-8 rounded-3xl bg-purple-600 hover:bg-purple-500 transition-all duration-300 shadow-xl hover:shadow-purple-500/20 border border-purple-400/20"
+                  className="group relative flex flex-col items-center text-center p-8 rounded-[32px] glass-card hover:border-purple-500/30"
                 >
-                  <div className="w-12 h-12 rounded-full border-2 border-white/30 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                    <CheckCircle2 className="text-white w-6 h-6" />
+                  <div className="w-14 h-14 rounded-2xl bg-purple-500/10 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-500">
+                    <CheckCircle2 className="text-purple-400 w-7 h-7" />
                   </div>
                   <h3 className="text-xl font-bold mb-2">Sesión libre</h3>
-                  <p className="text-purple-100/70 text-sm">Genera cualquier curso sin información previa.</p>
+                  <p className="text-slate-500 text-sm leading-relaxed">Genera cualquier curso sin información previa.</p>
                 </button>
 
                 <button 
                   onClick={() => selectMode('TEMPLATE')}
-                  className="group relative flex flex-col items-center text-center p-8 rounded-3xl bg-emerald-600 hover:bg-emerald-500 transition-all duration-300 shadow-xl hover:shadow-emerald-500/20 border border-emerald-400/20"
+                  className="group relative flex flex-col items-center text-center p-8 rounded-[32px] glass-card hover:border-cyan-500/30"
                 >
-                  <div className="w-12 h-12 rounded-full border-2 border-white/30 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                    <CheckCircle2 className="text-white w-6 h-6" />
+                  <div className="w-14 h-14 rounded-2xl bg-cyan-500/10 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-500">
+                    <CheckCircle2 className="text-cyan-400 w-7 h-7" />
                   </div>
-                  <h3 className="text-xl font-bold mb-2">Modelo de mi colegio</h3>
-                  <p className="text-emerald-100/70 text-sm">Crea tu sesión con la plantilla o esquema de tu colegio.</p>
+                  <h3 className="text-xl font-bold mb-2">Usar mi Formato</h3>
+                  <p className="text-slate-500 text-sm leading-relaxed">Sube tu propio esquema o modelo y la IA generará la sesión completa adaptándose a él.</p>
                 </button>
               </div>
             </div>
@@ -1263,1062 +2243,616 @@ export default function App() {
             key="form"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="min-h-screen bg-[#0f172a] text-white"
+            exit={{ opacity: 0 }}
+            className={cn(
+              "min-h-screen transition-colors duration-500",
+              theme === 'dark' ? "bg-[#050505]" : "bg-slate-50"
+            )}
           >
             {/* Header */}
-            <header className="sticky top-0 z-50 bg-[#0f172a]/80 backdrop-blur-md border-b border-slate-800">
-              <div className="max-w-5xl mx-auto px-6 h-20 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <button 
-                    onClick={() => setView('landing')}
-                    className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20 hover:scale-105 transition-transform"
-                  >
-                    <GraduationCap className="text-white w-6 h-6" />
-                  </button>
-                  <div>
-                    <h1 className="text-xl font-bold tracking-tight">EduGen <span className="text-emerald-400">V-5.4</span></h1>
-                    <p className="text-xs text-slate-400 font-medium uppercase tracking-widest">CNEB 2026 • {mode === 'UNIT' ? 'Unidad' : mode === 'BOOKS' ? 'Libros' : mode === 'FREE' ? 'Libre' : 'Plantilla'}</p>
-                  </div>
-                </div>
+            <header className={cn(
+              "sticky top-0 z-50 border-b transition-colors duration-500",
+              theme === 'dark' ? "glass-panel border-white/5" : "bg-white/80 backdrop-blur-xl border-slate-200"
+            )}>
+              <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <button 
                     onClick={() => setView('landing')}
-                    className="text-sm font-medium text-slate-400 hover:text-white transition-colors"
+                    className={cn(
+                      "w-12 h-12 rounded-2xl flex items-center justify-center shadow-2xl hover:scale-105 transition-transform",
+                      mode === 'UNIT' ? "bg-emerald-500 shadow-emerald-500/20" : 
+                      mode === 'BOOKS' ? "bg-blue-500 shadow-blue-500/20" : 
+                      mode === 'FREE' ? "bg-purple-500 shadow-purple-500/20" : 
+                      "bg-orange-500 shadow-orange-500/20"
+                    )}
+                  >
+                    <GraduationCap className="text-black w-7 h-7" />
+                  </button>
+                  <div>
+                    <h1 className={cn(
+                      "text-xl font-bold tracking-tight transition-colors",
+                      theme === 'dark' ? "text-white" : "text-slate-900"
+                    )}>EduGen <span className={cn(
+                      mode === 'UNIT' ? "text-emerald-400" : 
+                      mode === 'BOOKS' ? "text-blue-400" : 
+                      mode === 'FREE' ? "text-purple-400" : 
+                      "text-orange-400"
+                    )}>AI</span></h1>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">CNEB 2026</span>
+                      <span className="w-1 h-1 rounded-full bg-slate-700" />
+                      <span className={cn(
+                        "text-[10px] font-bold uppercase tracking-widest opacity-80",
+                        mode === 'UNIT' ? "text-emerald-400" : 
+                        mode === 'BOOKS' ? "text-blue-400" : 
+                        mode === 'FREE' ? "text-purple-400" : 
+                        "text-orange-400"
+                      )}>
+                        {mode === 'UNIT' ? 'Unidad' : mode === 'BOOKS' ? 'Libros' : mode === 'FREE' ? 'Libre' : 'Plantilla'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-6">
+                  {/* Theme Toggle */}
+                  <div className={cn(
+                    "flex items-center gap-1 p-1 rounded-xl border transition-colors",
+                    theme === 'dark' ? "bg-white/5 border-white/10" : "bg-slate-100 border-slate-200"
+                  )}>
+                    <button 
+                      onClick={() => setTheme('light')}
+                      className={cn(
+                        "p-2 rounded-lg transition-all",
+                        theme === 'light' ? cn(
+                          "bg-white shadow-sm",
+                          mode === 'UNIT' ? "text-emerald-600" : 
+                          mode === 'BOOKS' ? "text-blue-600" : 
+                          mode === 'FREE' ? "text-purple-600" : 
+                          "text-orange-600"
+                        ) : "text-slate-500 hover:text-slate-900"
+                      )}
+                    >
+                      <Sun size={16} />
+                    </button>
+                    <button 
+                      onClick={() => setTheme('dark')}
+                      className={cn(
+                        "p-2 rounded-lg transition-all",
+                        theme === 'dark' ? cn(
+                          "text-white shadow-lg",
+                          mode === 'UNIT' ? "bg-emerald-500 shadow-emerald-500/20" : 
+                          mode === 'BOOKS' ? "bg-blue-500 shadow-blue-500/20" : 
+                          mode === 'FREE' ? "bg-purple-500 shadow-purple-500/20" : 
+                          "bg-orange-500 shadow-orange-500/20"
+                        ) : "text-slate-500 hover:text-white"
+                      )}
+                    >
+                      <Moon size={16} />
+                    </button>
+                  </div>
+
+                  <button 
+                    onClick={() => setView('landing')}
+                    className={cn(
+                      "text-sm font-medium text-slate-500 transition-colors",
+                      mode === 'UNIT' ? "hover:text-emerald-500" : 
+                      mode === 'BOOKS' ? "hover:text-blue-500" : 
+                      mode === 'FREE' ? "hover:text-purple-500" : 
+                      "hover:text-orange-500"
+                    )}
                   >
                     Volver al inicio
                   </button>
-                  <div className="h-4 w-px bg-slate-800" />
-                  <span className="text-xs font-bold px-2 py-1 bg-slate-800 rounded text-slate-400">PRO</span>
+                  <div className="h-4 w-px bg-slate-700/30" />
+                  <div className={cn(
+                    "flex items-center gap-3 px-4 py-2 border rounded-xl transition-colors",
+                    theme === 'dark' ? "bg-white/5 border-white/10" : "bg-white border-slate-200 shadow-sm"
+                  )}>
+                    <User className="w-4 h-4 text-slate-400" />
+                    <span className={cn(
+                      "text-xs font-medium transition-colors",
+                      theme === 'dark' ? "text-slate-300" : "text-slate-700"
+                    )}>Juan Caicedo</span>
+                  </div>
                 </div>
               </div>
             </header>
 
-            <main className="max-w-5xl mx-auto px-6 py-12">
+            <main className="max-w-7xl mx-auto px-6 py-12">
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
                 
                 {/* Form Section */}
-                <div className="lg:col-span-7 space-y-10">
-                  {/* Smart Template Section (Only if not FREE mode) */}
-                  {mode !== 'FREE' && (
-                    <section className="bg-slate-900/40 border border-slate-800/60 rounded-3xl p-6 space-y-4 backdrop-blur-xl">
-                      {mode === 'UNIT' && (
-                        <div className="flex p-1 bg-slate-800/30 rounded-2xl mb-4">
-                          <button 
-                            onClick={() => setUnitTab('upload')}
-                            className={cn(
-                              "flex-1 py-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2",
-                              unitTab === 'upload' ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "text-slate-400 hover:text-slate-200"
-                            )}
-                          >
-                            <Upload size={14} />
-                            Subir Unidad
-                          </button>
-                          <button 
-                            onClick={() => setUnitTab('current')}
-                            className={cn(
-                              "flex-1 py-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2",
-                              unitTab === 'current' ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "text-slate-400 hover:text-slate-200"
-                            )}
-                          >
-                            <Calendar size={14} />
-                            Sesión Establecida
-                          </button>
-                        </div>
-                      )}
-
-                      {unitTab === 'upload' || mode !== 'UNIT' ? (
-                        <>
-                          <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white flex items-center justify-center shadow-lg shadow-emerald-500/20">
-                              {mode === 'UNIT' ? <FileText size={24} /> : mode === 'BOOKS' ? <BookOpen size={24} /> : <FileUp size={24} />}
-                            </div>
-                            <div>
-                              <h2 className="text-lg font-bold text-white">
-                                {mode === 'UNIT' ? 'Subir Unidad de Aprendizaje' : mode === 'BOOKS' ? 'Subir Libro/Página MINEDU' : 'Subir Esquema/Plantilla'}
-                              </h2>
-                              <p className="text-xs text-slate-400">
-                                {mode === 'UNIT' ? 'Sube tu unidad para que la IA extraiga la secuencia.' : mode === 'BOOKS' ? 'Sube la página del libro para generar la sesión.' : 'Sube tu esquema para adaptar el formulario.'}
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="relative">
-                            <input 
-                              type="file" 
-                              accept="image/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                              onChange={handleFileUpload}
-                              className="hidden"
-                              id="template-upload"
-                            />
-                            <label 
-                              htmlFor="template-upload"
-                              className={cn(
-                                "flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-2xl cursor-pointer transition-all",
-                                data.templateFile ? "bg-emerald-500/10 border-emerald-500/50" : "bg-slate-800/30 border-slate-700 hover:bg-slate-800/50 hover:border-emerald-500/30"
-                              )}
-                            >
-                              {isAnalyzingTemplate ? (
-                                <div className="flex flex-col items-center gap-2">
-                                  <Loader2 className="animate-spin text-emerald-400" />
-                                  <span className="text-xs font-bold text-emerald-400">Analizando...</span>
-                                </div>
-                              ) : data.templateFile ? (
-                                <div className="flex flex-col items-center gap-1">
-                                  <CheckCircle2 className="text-emerald-400" />
-                                  <span className="text-xs font-bold text-emerald-200">{data.templateFile.name}</span>
-                                  <span className="text-[10px] text-emerald-400/70">Archivo cargado con éxito</span>
-                                </div>
-                              ) : (
-                                <div className="flex flex-col items-center gap-1">
-                                  <Upload className="text-slate-500 mb-1" />
-                                  <span className="text-xs font-bold text-slate-400">Subir archivo</span>
-                                  <span className="text-[10px] text-slate-500">JPG, PNG, PDF, Word (Max 5MB)</span>
-                                </div>
-                              )}
-                            </label>
-                          </div>
-                          
-                          {data.detectedSchema && (
-                            <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700">
-                              <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-2">Campos Detectados:</p>
-                              <div className="flex flex-wrap gap-2">
-                                {data.detectedSchema.detectedFields?.map((f: string) => (
-                                  <span key={f} className="text-[9px] bg-emerald-500/10 text-emerald-400 px-2 py-1 rounded-full font-medium border border-emerald-500/20">{f}</span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="space-y-4">
-                          <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 rounded-xl bg-blue-500 text-white flex items-center justify-center shadow-lg shadow-blue-500/20">
-                              <Calendar size={24} />
-                            </div>
-                            <div>
-                              <h2 className="text-lg font-bold text-white">Sesión Establecida</h2>
-                              <p className="text-xs text-slate-400">Configura los detalles de la sesión actual de tu unidad.</p>
-                            </div>
-                          </div>
-                          
-                          <div className="bg-slate-800/30 rounded-2xl p-6 border border-slate-700 space-y-4">
-                            <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Título de la Unidad</label>
-                              <input 
-                                type="text"
-                                name="unit"
-                                value={data.unit}
-                                onChange={handleInputChange}
-                                placeholder="Ej: Unidad 1"
-                                className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-xs transition-all text-white placeholder:text-slate-600"
-                              />
-                            </div>
-                            <p className="text-[10px] text-slate-500 italic">
-                              * Esta información se sincroniza con el formulario principal.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </section>
-                  )}
-
-              {data.detectedSchema && data.detectedSchema.missingFields && data.detectedSchema.missingFields.length > 0 && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="bg-blue-500/10 border border-blue-500/20 rounded-2xl p-5 space-y-4 backdrop-blur-xl"
-                >
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="text-blue-400" size={16} />
-                    <h3 className="text-xs font-bold text-blue-200 uppercase tracking-wider">Campos Adicionales Detectados</h3>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {data.detectedSchema.missingFields.map((field) => (
-                      <div key={field} className="space-y-1">
-                        <label className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">{field}</label>
-                        <input 
-                          type="text"
-                          value={data.dynamicFieldsValues[field] || ''}
-                          onChange={(e) => setData(prev => ({
-                            ...prev,
-                            dynamicFieldsValues: {
-                              ...prev.dynamicFieldsValues,
-                              [field]: e.target.value
-                            }
-                          }))}
-                          placeholder={`Ingresa ${field.toLowerCase()}...`}
-                          className="w-full px-3 py-2 bg-slate-800/50 border border-blue-500/20 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-xs transition-all text-white placeholder:text-slate-600"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-
-            <section>
-              <div className="flex items-center gap-2 mb-6">
-                <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">1</div>
-                <h2 className="text-lg font-bold text-white">Datos del Docente e Institución</h2>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {isFieldVisible('teacherName') && (
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                      <User size={14} /> Nombre del Docente
-                    </label>
-                    <input 
-                      type="text" 
-                      name="teacherName"
-                      value={data.teacherName}
-                      onChange={handleInputChange}
-                      placeholder="Ej. Pedro Ruiz"
-                      className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition-all text-white placeholder:text-slate-600"
+                <div className="lg:col-span-7 space-y-12">
+                  {mode === 'FREE' && (
+                    <FreeMode 
+                      data={data}
+                      setData={setData}
+                      theme={theme}
+                      handleInputChange={handleInputChange}
+                      handleLogoUpload={handleLogoUpload}
+                      suggestTitle={suggestTitle}
+                      isSuggestingTitle={isSuggestingTitle}
+                      suggestContext={suggestContext}
+                      isSuggestingContext={isSuggestingContext}
+                      isFieldVisible={isFieldVisible}
+                      toggleCompetency={toggleCompetency}
+                      toggleTransversalCompetency={toggleTransversalCompetency}
+                      toggleTransversalApproach={toggleTransversalApproach}
+                      updateLearningTableRow={updateLearningTableRow}
+                      addLearningTableRow={addLearningTableRow}
+                      removeLearningTableRow={removeLearningTableRow}
+                      updateLearningGuide={updateLearningGuide}
+                      updateApplicationSheet={updateApplicationSheet}
+                      updateResourceRow={updateResourceRow}
+                      addResourceRow={addResourceRow}
+                      removeResourceRow={removeResourceRow}
+                      addSpecialNeed={addSpecialNeed}
+                      updateSpecialNeed={updateSpecialNeed}
+                      removeSpecialNeed={removeSpecialNeed}
+                      saveCurrentList={saveCurrentList}
+                      deleteList={deleteList}
+                      loadList={loadList}
+                      currentListName={currentListName}
+                      setCurrentListName={setCurrentListName}
+                      savedLists={savedLists}
                     />
-                  </div>
-                )}
-                {isFieldVisible('institution') && (
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                      <School size={14} /> Institución Educativa
-                    </label>
-                    <input 
-                      type="text" 
-                      name="institution"
-                      value={data.institution}
-                      onChange={handleInputChange}
-                      placeholder="Ej. I.E. Martín de la Riva"
-                      className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition-all text-white placeholder:text-slate-600"
+                  )}
+                  {mode === 'UNIT' && (
+                    <UnitMode 
+                      data={data}
+                      setData={setData}
+                      theme={theme}
+                      handleInputChange={handleInputChange}
+                      handleLogoUpload={handleLogoUpload}
+                      handleFileUpload={handleFileUpload}
+                      suggestTitle={suggestTitle}
+                      isSuggestingTitle={isSuggestingTitle}
+                      suggestContext={suggestContext}
+                      isSuggestingContext={isSuggestingContext}
+                      isFieldVisible={isFieldVisible}
+                      unitTab={unitTab}
+                      setUnitTab={setUnitTab}
+                      isAnalyzingTemplate={isAnalyzingTemplate}
+                      toggleCompetency={toggleCompetency}
+                      toggleTransversalCompetency={toggleTransversalCompetency}
+                      toggleTransversalApproach={toggleTransversalApproach}
+                      updateLearningTableRow={updateLearningTableRow}
+                      addLearningTableRow={addLearningTableRow}
+                      removeLearningTableRow={removeLearningTableRow}
+                      updateLearningGuide={updateLearningGuide}
+                      updateApplicationSheet={updateApplicationSheet}
+                      updateResourceRow={updateResourceRow}
+                      addResourceRow={addResourceRow}
+                      removeResourceRow={removeResourceRow}
+                      addSpecialNeed={addSpecialNeed}
+                      updateSpecialNeed={updateSpecialNeed}
+                      removeSpecialNeed={removeSpecialNeed}
+                      saveCurrentList={saveCurrentList}
+                      deleteList={deleteList}
+                      loadList={loadList}
+                      currentListName={currentListName}
+                      setCurrentListName={setCurrentListName}
+                      savedLists={savedLists}
+                      resetSessionData={resetSessionData}
+                      clearFiles={clearFiles}
                     />
-                  </div>
-                )}
-              </div>
-            </section>
-
-            <section>
-              <div className="flex items-center gap-2 mb-6">
-                <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">2</div>
-                <h2 className="text-lg font-bold text-white">Contexto y Planificación</h2>
-              </div>
-              <div className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {isFieldVisible('level') && (
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Nivel Educativo</label>
-                      <select 
-                        name="level"
-                        value={data.level}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-white appearance-none cursor-pointer"
-                      >
-                        {NIVELES.map(n => <option key={n} value={n} className="bg-slate-900">{n}</option>)}
-                      </select>
-                    </div>
                   )}
-                  {isFieldVisible('grade') && (
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Grado</label>
-                      <select 
-                        name="grade"
-                        value={data.grade}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-white appearance-none cursor-pointer"
-                      >
-                        {GRADOS_POR_NIVEL[data.level].map(g => <option key={g} value={g} className="bg-slate-900">{g}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  {isFieldVisible('bimestre') && (
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Bimestre / Trimestre</label>
-                      <select 
-                        name="bimestre"
-                        value={data.bimestre}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-white appearance-none cursor-pointer"
-                      >
-                        {BIMESTRES.map(b => <option key={b} value={b} className="bg-slate-900">{b} Bimestre</option>)}
-                      </select>
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {isFieldVisible('unit') && (
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Unidad de Aprendizaje</label>
-                      <input 
-                        type="text" 
-                        name="unit"
-                        value={data.unit}
-                        onChange={handleInputChange}
-                        placeholder="Ej. Unidad 1"
-                        className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-white placeholder:text-slate-600"
-                      />
-                    </div>
-                  )}
-                  {isFieldVisible('sessionNumber') && (
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Nº de Sesión</label>
-                      <input 
-                        type="text" 
-                        name="sessionNumber"
-                        value={data.sessionNumber}
-                        onChange={handleInputChange}
-                        placeholder="Ej. Sesión 05"
-                        className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-white placeholder:text-slate-600"
-                      />
-                    </div>
-                  )}
-                  {isFieldVisible('date') && (
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Fecha</label>
-                      <input 
-                        type="date" 
-                        name="date"
-                        value={data.date}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-white [color-scheme:dark]"
-                      />
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {isFieldVisible('area') && (
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Área Curricular</label>
-                      <select 
-                        name="area"
-                        value={data.area}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-white appearance-none cursor-pointer"
-                      >
-                        {AREAS_POR_NIVEL[data.level].map(a => <option key={a} value={a} className="bg-slate-900">{a}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  {isFieldVisible('duration') && (
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Duración total de la Sesión (minutos)</label>
-                      <select 
-                        name="duration"
-                        value={data.duration}
-                        onChange={handleInputChange}
-                        className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-white appearance-none cursor-pointer"
-                      >
-                        {DURACIONES.map(d => <option key={d.value} value={d.value} className="bg-slate-900">{d.label}</option>)}
-                      </select>
-                    </div>
-                  )}
-                </div>
-
-                {isFieldVisible('instrument') && (
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Instrumento de Evaluación</label>
-                    <select 
-                      name="instrument"
-                      value={data.instrument}
-                      onChange={handleInputChange}
-                      className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-white appearance-none cursor-pointer"
-                    >
-                      {INSTRUMENTOS_EVALUACION.map(i => <option key={i} value={i} className="bg-slate-900">{i}</option>)}
-                    </select>
-                  </div>
-                )}
-
-                {isFieldVisible('topic') && (
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                      <BookOpen size={14} /> Tema Específico de la Sesión
-                    </label>
-                    <input 
-                      type="text" 
-                      name="topic"
-                      value={data.topic}
-                      onChange={handleInputChange}
-                      placeholder="Ej. Las Fracciones en la vida diaria"
-                      className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-white placeholder:text-slate-600"
+                  {mode === 'BOOKS' && (
+                    <BooksMode 
+                      data={data}
+                      setData={setData}
+                      handleInputChange={handleInputChange}
+                      handleLogoUpload={handleLogoUpload}
+                      handleFileUpload={handleFileUpload}
+                      suggestTitle={suggestTitle}
+                      isSuggestingTitle={isSuggestingTitle}
+                      suggestContext={suggestContext}
+                      isSuggestingContext={isSuggestingContext}
+                      isFieldVisible={isFieldVisible}
+                      toggleCompetency={toggleCompetency}
+                      toggleTransversalCompetency={toggleTransversalCompetency}
+                      toggleTransversalApproach={toggleTransversalApproach}
+                      updateLearningTableRow={updateLearningTableRow}
+                      addLearningTableRow={addLearningTableRow}
+                      removeLearningTableRow={removeLearningTableRow}
+                      updateLearningGuide={updateLearningGuide}
+                      updateApplicationSheet={updateApplicationSheet}
+                      updateResourceRow={updateResourceRow}
+                      addResourceRow={addResourceRow}
+                      removeResourceRow={removeResourceRow}
+                      addSpecialNeed={addSpecialNeed}
+                      updateSpecialNeed={updateSpecialNeed}
+                      removeSpecialNeed={removeSpecialNeed}
+                      saveCurrentList={saveCurrentList}
+                      deleteList={deleteList}
+                      loadList={loadList}
+                      currentListName={currentListName}
+                      setCurrentListName={setCurrentListName}
+                      savedLists={savedLists}
                     />
-                  </div>
-                )}
-
-                {isFieldVisible('sessionTitle') && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                        <Sparkles size={14} className="text-emerald-400" /> Título de la sesión
-                      </label>
-                      <button 
-                        onClick={suggestTitle}
-                        disabled={isSuggestingTitle}
-                        className="text-[10px] font-bold bg-emerald-500/10 text-emerald-400 px-2 py-1 rounded hover:bg-emerald-500/20 transition-colors flex items-center gap-1 disabled:opacity-50"
-                      >
-                        {isSuggestingTitle ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
-                        Sugerir con IA
-                      </button>
-                    </div>
-                    <p className="text-[10px] text-slate-500">
-                      <span className="text-yellow-500 font-bold">(Opcional)</span> Para el encabezado del Word; si lo dejas vacío se usa el tema.
-                    </p>
-                    <textarea 
-                      name="sessionTitle"
-                      value={data.sessionTitle}
-                      onChange={handleInputChange}
-                      rows={2}
-                      placeholder="Título de la sesión..."
-                      className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none resize-none text-sm font-medium text-white placeholder:text-slate-600"
+                  )}
+                  {mode === 'TEMPLATE' && (
+                    <TemplateMode 
+                      data={data}
+                      setData={setData}
+                      theme={theme}
+                      handleInputChange={handleInputChange}
+                      handleLogoUpload={handleLogoUpload}
+                      handleFileUpload={handleFileUpload}
+                      suggestTitle={suggestTitle}
+                      isSuggestingTitle={isSuggestingTitle}
+                      suggestContext={suggestContext}
+                      isSuggestingContext={isSuggestingContext}
+                      isFieldVisible={isFieldVisible}
+                      templateTab={templateTab}
+                      setTemplateTab={setTemplateTab}
+                      isAnalyzingTemplate={isAnalyzingTemplate}
+                      toggleCompetency={toggleCompetency}
+                      toggleTransversalCompetency={toggleTransversalCompetency}
+                      toggleTransversalApproach={toggleTransversalApproach}
+                      updateLearningTableRow={updateLearningTableRow}
+                      addLearningTableRow={addLearningTableRow}
+                      removeLearningTableRow={removeLearningTableRow}
+                      updateLearningGuide={updateLearningGuide}
+                      updateApplicationSheet={updateApplicationSheet}
+                      updateResourceRow={updateResourceRow}
+                      addResourceRow={addResourceRow}
+                      removeResourceRow={removeResourceRow}
+                      addSpecialNeed={addSpecialNeed}
+                      updateSpecialNeed={updateSpecialNeed}
+                      removeSpecialNeed={removeSpecialNeed}
+                      saveCurrentList={saveCurrentList}
+                      deleteList={deleteList}
+                      loadList={loadList}
+                      currentListName={currentListName}
+                      setCurrentListName={setCurrentListName}
+                      savedLists={savedLists}
                     />
-                  </div>
-                )}
-
-                {isFieldVisible('studentContext') && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                        <FileText size={14} /> Contexto de los estudiantes (DUA)
-                      </label>
-                      <button 
-                        onClick={suggestContext}
-                        disabled={isSuggestingContext}
-                        className="text-[10px] font-bold bg-emerald-500/10 text-emerald-400 px-2 py-1 rounded hover:bg-emerald-500/20 transition-colors flex items-center gap-1 disabled:opacity-50"
-                      >
-                        {isSuggestingContext ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
-                        Sugerir con IA
-                      </button>
-                    </div>
-                    <textarea 
-                      name="studentContext"
-                      value={data.studentContext}
-                      onChange={handleInputChange}
-                      rows={3}
-                      placeholder="Describe el entorno, necesidades e intereses de tus alumnos..."
-                      className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none resize-none text-white placeholder:text-slate-600"
-                    />
-                  </div>
-                )}
-
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex flex-col gap-1">
-                    <span className="flex items-center gap-2"><Target size={14} /> Propósito de aprendizaje</span>
-                    <span className="text-[10px] text-yellow-500 lowercase font-medium">
-                      <span className="font-bold uppercase">(Opcional)</span> Si realizaste la <span className="font-bold uppercase text-emerald-400">UNIDAD</span> en el generador, pégalo aquí para alinear toda la sesión con ese propósito.
-                    </span>
-                  </label>
-                  <textarea 
-                    name="unitPurpose"
-                    value={data.unitPurpose}
-                    onChange={handleInputChange}
-                    rows={3}
-                    placeholder="Pega el propósito de tu unidad..."
-                    className="w-full px-4 py-3 bg-slate-800/50 border border-emerald-500/20 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none resize-none text-sm text-white placeholder:text-slate-600"
-                  />
-                </div>
-              </div>
-            </section>
-
-            {isFieldVisible('competencies') && (
-              <section>
-                <div className="flex items-center gap-2 mb-6">
-                  <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">3</div>
-                  <h2 className="text-lg font-bold text-white">Competencias a Desarrollar</h2>
-                </div>
-                <div className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-6 space-y-4 backdrop-blur-xl">
-                  <div className="flex items-center gap-3 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl mb-2">
-                    <input 
-                      type="text" 
-                      className="hidden" // Just to keep the structure if needed, but we use state
-                    />
-                    <input 
-                      type="checkbox" 
-                      id="aiSuggestCompetency"
-                      checked={data.aiSuggestCompetency}
-                      onChange={(e) => setData(prev => ({ ...prev, aiSuggestCompetency: e.target.checked, competencies: e.target.checked ? [] : prev.competencies }))}
-                      className="w-4 h-4 text-emerald-500 rounded focus:ring-emerald-500 bg-slate-800 border-slate-700"
-                    />
-                    <label htmlFor="aiSuggestCompetency" className="text-sm font-bold text-emerald-400 cursor-pointer">
-                      Dejar que la IA sugiera la competencia
-                    </label>
-                  </div>
-                  
-                  {!data.aiSuggestCompetency && (
-                    <>
-                      <p className="text-xs font-medium text-slate-500 italic">Selecciona hasta 3 competencias para esta sesión:</p>
-                      <div className="grid grid-cols-1 gap-3">
-                        {COMPETENCIAS_POR_AREA[data.area]?.map(comp => (
-                          <button
-                            key={comp}
-                            onClick={() => toggleCompetency(comp)}
-                            className={cn(
-                              "flex items-center justify-between px-4 py-3 rounded-xl border transition-all text-left text-sm font-medium",
-                              data.competencies.includes(comp) 
-                                ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400" 
-                                : "bg-slate-800/30 border-slate-700 text-slate-400 hover:border-slate-500"
-                            )}
-                          >
-                            {comp}
-                            {data.competencies.includes(comp) && <CheckCircle2 size={16} className="text-emerald-400" />}
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </section>
-            )}
-
-            {(isFieldVisible('transversalCompetencies') || isFieldVisible('transversalApproaches')) && (
-              <section>
-                <div className="flex items-center gap-2 mb-6">
-                  <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">4</div>
-                  <h2 className="text-lg font-bold text-white">Elementos Transversales (Opcional)</h2>
-                </div>
-                <div className="space-y-6">
-                  {isFieldVisible('transversalCompetencies') && (
-                    <div className="space-y-3">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Competencias Transversales</label>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {COMPETENCIAS_TRANSVERSALES.map(comp => (
-                          <button
-                            key={comp}
-                            onClick={() => toggleTransversalCompetency(comp)}
-                            className={cn(
-                              "flex items-center justify-between px-4 py-3 rounded-xl border transition-all text-left text-sm font-medium",
-                              data.transversalCompetencies.includes(comp) 
-                                ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400" 
-                                : "bg-slate-800/30 border-slate-700 text-slate-400 hover:border-slate-500"
-                            )}
-                          >
-                            {comp}
-                            {data.transversalCompetencies.includes(comp) && <CheckCircle2 size={16} className="text-emerald-400" />}
-                          </button>
-                        ))}
-                      </div>
-                      {data.transversalCompetencies.length === 0 && (
-                        <p className="text-[10px] text-slate-500 italic">Si no seleccionas ninguna, la IA sugerirá las más pertinentes.</p>
-                      )}
-                    </div>
                   )}
 
-                  {isFieldVisible('transversalApproaches') && (
-                    <div className="space-y-3">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Enfoques Transversales</label>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                        {ENFOQUES_TRANSVERSALES.map(approach => (
-                          <button
-                            key={approach}
-                            onClick={() => toggleTransversalApproach(approach)}
-                            className={cn(
-                              "flex items-center justify-between px-4 py-3 rounded-xl border transition-all text-left text-sm font-medium",
-                              data.transversalApproaches.includes(approach) 
-                                ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400" 
-                                : "bg-slate-800/30 border-slate-700 text-slate-400 hover:border-slate-500"
-                            )}
-                          >
-                            {approach}
-                            {data.transversalApproaches.includes(approach) && <CheckCircle2 size={16} className="text-emerald-400" />}
-                          </button>
-                        ))}
-                      </div>
-                      {data.transversalApproaches.length === 0 && (
-                        <p className="text-[10px] text-slate-500 italic">Si no seleccionas ninguno, la IA sugerirá los más pertinentes.</p>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="bg-slate-900 border border-emerald-500/30 rounded-3xl p-6 space-y-6 mt-6">
-                    <h3 className="text-emerald-400 font-bold text-center text-sm uppercase tracking-widest">Opciones 2026 (inclusión, diversidad, recursos)</h3>
-                    
-                    <div className="space-y-4">
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-300">Enfoque inclusión y participación <span className="text-yellow-500">(Opcional)</span>:</label>
-                        <select 
-                          name="inclusion2026"
-                          value={data.inclusion2026}
-                          onChange={handleInputChange}
-                          className="w-full bg-slate-800 border border-emerald-500/20 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none appearance-none cursor-pointer"
-                        >
-                          {OPCIONES_INCLUSION_2026.map(opt => (
-                            <option key={opt} value={opt} className="bg-slate-800">{opt === 'Ninguno' ? '-- Ninguno --' : opt}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-300">Recursos y referencias <span className="text-yellow-500">(Opcional)</span>:</label>
-                        <select 
-                          name="resources2026"
-                          value={data.resources2026}
-                          onChange={handleInputChange}
-                          className="w-full bg-slate-800 border border-emerald-500/20 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none appearance-none cursor-pointer"
-                        >
-                          {OPCIONES_RECURSOS_2026.map(opt => (
-                            <option key={opt} value={opt} className="bg-slate-800">{opt === 'Ninguno' ? '-- Ninguno --' : opt}</option>
-                          ))}
-                        </select>
-                        {data.resources2026 === 'Escribir o redactar (personalizado)' && (
-                          <textarea 
-                            name="resources2026Custom"
-                            value={data.resources2026Custom}
-                            onChange={handleInputChange}
-                            placeholder="Escribe aquí tus recursos y referencias..."
-                            className="w-full bg-slate-800 border border-emerald-500/20 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none resize-none h-24 mt-2"
-                          />
-                        )}
-                      </div>
-
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-300">Consideraciones de diversidad <span className="text-yellow-500">(Opcional)</span>:</label>
-                        <select 
-                          name="diversity2026"
-                          value={data.diversity2026}
-                          onChange={handleInputChange}
-                          className="w-full bg-slate-800 border border-emerald-500/20 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none appearance-none cursor-pointer"
-                        >
-                          {OPCIONES_DIVERSIDAD_2026.map(opt => (
-                            <option key={opt} value={opt} className="bg-slate-800">{opt === 'Ninguno' ? '-- Ninguno --' : opt}</option>
-                          ))}
-                        </select>
-                        {data.diversity2026 === 'Escribir o redactar (personalizado)' && (
-                          <textarea 
-                            name="diversity2026Custom"
-                            value={data.diversity2026Custom}
-                            onChange={handleInputChange}
-                            placeholder="Escribe aquí tus consideraciones de diversidad..."
-                            className="w-full bg-slate-800 border border-emerald-500/20 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none resize-none h-24 mt-2"
-                          />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {isFieldVisible('specialNeeds') && (
-              <section>
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">5</div>
-                    <h2 className="text-lg font-bold text-white">Inclusión (NEE)</h2>
-                  </div>
-                  <button 
-                    onClick={addSpecialNeed}
-                    className="flex items-center gap-2 text-xs font-bold text-emerald-400 bg-emerald-500/10 px-3 py-2 rounded-lg hover:bg-emerald-500/20 transition-colors"
-                  >
-                    <Plus size={14} /> Agregar Alumno
-                  </button>
-                </div>
-                
-                <div className="space-y-4">
-                  <AnimatePresence>
-                    {data.specialNeeds.map((student) => (
-                      <motion.div 
-                        key={student.id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-6 relative group backdrop-blur-xl"
-                      >
-                        <button 
-                          onClick={() => removeSpecialNeed(student.id)}
-                          className="absolute top-4 right-4 text-slate-600 hover:text-red-400 transition-colors"
-                        >
-                          <Trash2 size={18} />
-                        </button>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Nombre del alumno</label>
-                            <input 
-                              type="text" 
-                              value={student.name}
-                              onChange={(e) => updateSpecialNeed(student.id, 'name', e.target.value)}
-                              placeholder="Nombre..."
-                              className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg focus:ring-1 focus:ring-emerald-500 outline-none text-sm text-white placeholder:text-slate-600"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Condición</label>
-                            <select 
-                              value={student.condition}
-                              onChange={(e) => updateSpecialNeed(student.id, 'condition', e.target.value)}
-                              className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg focus:ring-1 focus:ring-emerald-500 outline-none text-sm text-white appearance-none cursor-pointer"
-                            >
-                              <option value="" className="bg-slate-900">Seleccionar condición...</option>
-                              {CONDICIONES_NEE.map(c => <option key={c} value={c} className="bg-slate-900">{c}</option>)}
-                            </select>
-                          </div>
-                          <div className="md:col-span-2 space-y-2">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Actividad Sugerida</label>
-                            <select 
-                              value={student.activity}
-                              onChange={(e) => updateSpecialNeed(student.id, 'activity', e.target.value)}
-                              className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg focus:ring-1 focus:ring-emerald-500 outline-none text-sm text-white appearance-none cursor-pointer"
-                            >
-                              <option value="" className="bg-slate-900">Seleccionar actividad...</option>
-                              {ACTIVIDADES_NEE.map(a => <option key={a} value={a} className="bg-slate-900">{a}</option>)}
-                            </select>
-                          </div>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
-                  {data.specialNeeds.length === 0 && (
-                    <div className="border-2 border-dashed border-slate-800 rounded-2xl py-10 flex flex-col items-center justify-center text-slate-600">
-                      <Plus size={32} className="mb-2 opacity-20" />
-                      <p className="text-sm font-medium">No hay alumnos con NEE registrados</p>
-                    </div>
-                  )}
-                </div>
-              </section>
-            )}
-
-            {isFieldVisible('studentList') && (
-              <section>
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">6</div>
-                    <h2 className="text-lg font-bold text-white">Lista de Alumnos (Opcional)</h2>
-                  </div>
-                <div className="flex items-center gap-2">
-                  <button 
-                    onClick={saveCurrentList}
-                    className="text-[10px] font-bold bg-emerald-500/10 text-emerald-400 px-3 py-2 rounded-lg hover:bg-emerald-500/20 transition-colors"
-                  >
-                    Guardar lista
-                  </button>
-                  {currentListName && (
-                    <button 
-                      onClick={() => deleteList(currentListName)}
-                      className="text-[10px] font-bold bg-red-500/10 text-red-400 px-3 py-2 rounded-lg hover:bg-red-500/20 transition-colors"
-                    >
-                      Eliminar
-                    </button>
-                  )}
-                </div>
-              </div>
-              
-              <div className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-6 space-y-4 backdrop-blur-xl">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Seleccionar lista guardada</label>
-                  <select 
-                    value={currentListName}
-                    onChange={(e) => loadList(e.target.value)}
-                    className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-sm text-white appearance-none cursor-pointer"
-                  >
-                    <option value="" className="bg-slate-900">-- Seleccionar lista guardada --</option>
-                    {Object.keys(savedLists).map(name => (
-                      <option key={name} value={name} className="bg-slate-900">{name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Nombre de la lista (para guardar)</label>
-                  <input 
-                    type="text"
-                    value={currentListName}
-                    onChange={(e) => setCurrentListName(e.target.value)}
-                    placeholder="Ej. 2do A - Matemática"
-                    className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-sm text-white placeholder:text-slate-600"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Nombres de alumnos (uno por línea)</label>
-                  <textarea 
-                    value={data.studentList}
-                    onChange={(e) => setData(prev => ({ ...prev, studentList: e.target.value }))}
-                    rows={6}
-                    placeholder="Juan Pérez García&#10;María López Rodríguez&#10;..."
-                    className="w-full px-4 py-3 bg-slate-800/50 border border-slate-700 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none resize-none text-sm font-mono text-white placeholder:text-slate-600"
-                  />
-                  <p className="text-[10px] text-slate-500">Los nombres aparecerán en el instrumento de evaluación del documento Word.</p>
-                </div>
-              </div>
-            </section>
-          )}
-
-            <section>
-              <div className="flex items-center gap-2 mb-6">
-                <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">7</div>
-                <h2 className="text-lg font-bold text-white">Opciones de Contenido Adicional</h2>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <label className={cn(
-                  "flex items-start gap-4 p-4 rounded-2xl border transition-all cursor-pointer",
-                  data.generateActivities ? "bg-emerald-500/10 border-emerald-500/50" : "bg-slate-800/30 border-slate-700 hover:border-slate-500"
-                )}>
-                  <input 
-                    type="checkbox"
-                    checked={data.generateActivities}
-                    onChange={(e) => setData(prev => ({ ...prev, generateActivities: e.target.checked }))}
-                    className="mt-1 w-4 h-4 text-emerald-500 rounded focus:ring-emerald-500 bg-slate-800 border-slate-700"
-                  />
-                  <div>
-                    <span className="block font-bold text-white">Generar Actividades de aprendizaje</span>
-                    <span className="text-xs text-slate-500">Guía de aprendizaje paso a paso según secuencia didáctica.</span>
-                  </div>
-                </label>
-                <label className={cn(
-                  "flex items-start gap-4 p-4 rounded-2xl border transition-all cursor-pointer",
-                  data.generateApplication ? "bg-emerald-500/10 border-emerald-500/50" : "bg-slate-800/30 border-slate-700 hover:border-slate-500"
-                )}>
-                  <input 
-                    type="checkbox"
-                    checked={data.generateApplication}
-                    onChange={(e) => setData(prev => ({ ...prev, generateApplication: e.target.checked }))}
-                    className="mt-1 w-4 h-4 text-emerald-500 rounded focus:ring-emerald-500 bg-slate-800 border-slate-700"
-                  />
-                  <div>
-                    <span className="block font-bold text-white">Generar Ficha de Aplicación</span>
-                    <span className="text-xs text-slate-500">Guía de práctica robusta con ejercicios contextualizados para obtener evidencias.</span>
-                  </div>
-                </label>
-              </div>
-            </section>
-
-            <div className="pt-6">
-              <button 
-                onClick={generateSession}
-                disabled={isGenerating}
-                className="w-full bg-emerald-600 text-white py-5 rounded-2xl font-bold text-lg shadow-xl shadow-emerald-900/20 hover:bg-emerald-500 hover:-translate-y-1 transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:translate-y-0"
-              >
-                {isGenerating ? (
-                  <>
-                    <Loader2 className="animate-spin" />
-                    Generando con IA...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={24} />
-                    Generar Sesión Completa
-                  </>
-                )}
-              </button>
-              {error && (
-                <div className="mt-4 p-4 bg-red-500/10 text-red-400 rounded-xl flex items-center gap-3 text-sm font-medium border border-red-500/20">
-                  <AlertCircle size={18} />
-                  {error}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Preview Section */}
-          <div className="lg:col-span-5">
-            <div className="sticky top-32">
-              <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl shadow-black/50">
-                <div className="bg-slate-950 p-6 flex items-center justify-between border-b border-slate-800">
-                  <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full bg-red-500/50" />
-                    <div className="w-3 h-3 rounded-full bg-yellow-500/50" />
-                    <div className="w-3 h-3 rounded-full bg-green-500/50" />
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Vista Previa del Documento</span>
-                </div>
-                
-                <div className="p-8 min-h-[600px] flex flex-col">
-                  {!generatedContent ? (
-                    <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4">
-                      <div className="w-16 h-16 bg-slate-800/50 rounded-full flex items-center justify-center text-slate-600">
-                        <FileText size={32} />
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold text-slate-500">Sin contenido generado</p>
-                        <p className="text-xs text-slate-600 max-w-[200px] mx-auto mt-1">Completa el formulario y presiona generar para ver el resultado aquí.</p>
-                      </div>
-                    </div>
-                  ) : (
+                  {data.detectedSchema && data.detectedSchema.missingFields && data.detectedSchema.missingFields.length > 0 && (mode !== 'TEMPLATE' || templateTab !== 'SUBIR') && (
                     <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="space-y-8"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className={cn(
+                        "border rounded-2xl p-5 space-y-4 backdrop-blur-xl",
+                        mode === 'UNIT' ? "bg-emerald-500/10 border-emerald-500/20" : 
+                        mode === 'BOOKS' ? "bg-blue-500/10 border-blue-500/20" : 
+                        mode === 'FREE' ? "bg-purple-500/10 border-purple-500/20" : 
+                        "bg-orange-500/10 border-orange-500/20"
+                      )}
                     >
-                      <div className="text-center space-y-2">
-                        <h3 className="text-2xl font-black leading-tight text-white">{generatedContent.sessionTitle}</h3>
-                        <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest">{data.area} • {data.grade}</p>
+                      <div className="flex items-center gap-2">
+                        <Sparkles className={cn(
+                          mode === 'UNIT' ? "text-emerald-400" : 
+                          mode === 'BOOKS' ? "text-blue-400" : 
+                          mode === 'FREE' ? "text-purple-400" : 
+                          "text-orange-400"
+                        )} size={16} />
+                        <h3 className={cn(
+                          "text-xs font-bold uppercase tracking-wider",
+                          mode === 'UNIT' ? "text-emerald-200" : 
+                          mode === 'BOOKS' ? "text-blue-200" : 
+                          mode === 'FREE' ? "text-purple-200" : 
+                          "text-orange-200"
+                        )}>Campos Adicionales Detectados</h3>
                       </div>
-
-                      <div className="space-y-6">
-                        <div className="p-5 bg-slate-800/30 rounded-2xl border border-slate-700/50 space-y-4">
-                          <div>
-                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Propósito Resumido</h4>
-                            <p className="text-sm text-slate-300 leading-relaxed italic">"{generatedContent.purpose.summary}"</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {data.detectedSchema.missingFields.map((field) => (
+                          <div key={field} className="space-y-1">
+                            <label className={cn(
+                              "text-[10px] font-bold uppercase tracking-wider",
+                              mode === 'UNIT' ? "text-emerald-400" : 
+                              mode === 'BOOKS' ? "text-blue-400" : 
+                              mode === 'FREE' ? "text-purple-400" : 
+                              "text-orange-400"
+                            )}>{field}</label>
+                            <input 
+                              type="text"
+                              value={data.dynamicFieldsValues[field] || ''}
+                              onChange={(e) => setData(prev => ({
+                                ...prev,
+                                dynamicFieldsValues: {
+                                  ...prev.dynamicFieldsValues,
+                                  [field]: e.target.value
+                                }
+                              }))}
+                              placeholder={`Ingresa ${field.toLowerCase()}...`}
+                              className={cn(
+                                "w-full px-3 py-2 bg-slate-800/50 border rounded-lg outline-none text-xs transition-all placeholder:text-slate-600 transition-colors",
+                                mode === 'UNIT' ? "border-emerald-500/20 focus:ring-emerald-500" : 
+                                mode === 'BOOKS' ? "border-blue-500/20 focus:ring-blue-500" : 
+                                mode === 'FREE' ? "border-purple-500/20 focus:ring-purple-500" : 
+                                "border-orange-500/20 focus:ring-orange-500"
+                              )}
+                              style={{ color: 'var(--text-heading)' }}
+                            />
                           </div>
-                          <div className="grid grid-cols-1 gap-3 pt-2 border-t border-slate-700/50">
-                            <div>
-                              <h5 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Situación Significativa</h5>
-                              <p className="text-[11px] text-slate-400 leading-tight">{generatedContent.purpose.significantSituationRelation}</p>
-                            </div>
-                            <div>
-                              <h5 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Desarrollo Integral</h5>
-                              <p className="text-[11px] text-slate-400 leading-tight">{generatedContent.purpose.integralDevelopmentRelation}</p>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="space-y-4">
-                          <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Evidencia de Aprendizaje</h4>
-                          <div className="p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-xl">
-                            <p className="text-[11px] text-slate-300 leading-relaxed">
-                              {generatedContent.learningTable?.[0]?.evidence || "No especificada"}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="space-y-4">
-                          <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Elementos Transversales</h4>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="p-3 bg-emerald-500/5 border border-emerald-500/10 rounded-xl">
-                              <p className="text-[9px] font-bold text-emerald-400 uppercase mb-1">Competencias</p>
-                              <p className="text-[10px] text-slate-400 line-clamp-2">
-                                {generatedContent.transversalCompetencies?.map((c: any) => c.competency).join(', ') || "Sugeridas por IA"}
-                              </p>
-                            </div>
-                            <div className="p-3 bg-emerald-500/5 border border-emerald-500/10 rounded-xl">
-                              <p className="text-[9px] font-bold text-emerald-400 uppercase mb-1">Enfoques</p>
-                              <p className="text-[10px] text-slate-400 line-clamp-2">
-                                {generatedContent.transversalApproaches?.map((a: any) => a.approach).join(', ') || "Sugeridos por IA"}
-                              </p>
-                            </div>
-                          </div>
-                          {generatedContent.transversalCompetencies?.some((c: any) => c.evidence) && (
-                            <div className="mt-2 p-3 bg-slate-800/50 border border-slate-700/50 rounded-xl">
-                              <p className="text-[9px] font-bold text-slate-500 uppercase mb-1">Evidencia Transversal (TIC/Autonomía)</p>
-                              {generatedContent.transversalCompetencies.filter((c: any) => c.evidence).map((c: any, idx: number) => (
-                                <p key={idx} className="text-[10px] text-slate-400 leading-tight mb-1">
-                                  <span className="font-bold text-emerald-500/70">{c.competency}:</span> {c.evidence}
-                                </p>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-
-                        {generatedContent.customData && Object.keys(generatedContent.customData).length > 0 && (
-                          <div className="space-y-4">
-                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Datos del Formato Detectado</h4>
-                            <div className="p-4 bg-blue-500/5 border border-blue-500/10 rounded-xl space-y-2">
-                              {Object.entries(generatedContent.customData).map(([key, val]) => (
-                                <div key={key} className="flex justify-between gap-4">
-                                  <span className="text-[10px] font-bold text-blue-400 uppercase">{key}:</span>
-                                  <span className="text-[10px] text-slate-400 text-right">{String(val)}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {generatedContent.learningGuide && (
-                          <div className="space-y-4">
-                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Guía de Actividades</h4>
-                            <div className="p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-xl space-y-3">
-                              <p className="text-xs font-bold text-emerald-400">{generatedContent.learningGuide.title}</p>
-                              <p className="text-[10px] text-slate-400 italic line-clamp-2">{generatedContent.learningGuide.introduction}</p>
-                              <div className="space-y-2">
-                                {generatedContent.learningGuide.steps.slice(0, 2).map((step: any) => (
-                                  <div key={step.stepNumber} className="text-[10px] text-slate-300">
-                                    <span className="font-bold text-emerald-500">Paso {step.stepNumber}:</span> {step.title}
-                                  </div>
-                                ))}
-                                {generatedContent.learningGuide.steps.length > 2 && (
-                                  <p className="text-[9px] text-slate-500">... y {generatedContent.learningGuide.steps.length - 2} pasos más</p>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {generatedContent.applicationSheet && (
-                          <div className="space-y-4">
-                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Ficha de Aplicación</h4>
-                            <div className="p-4 bg-blue-500/5 border border-blue-500/10 rounded-xl space-y-3">
-                              <p className="text-xs font-bold text-blue-400">{generatedContent.applicationSheet.title}</p>
-                              <p className="text-[10px] text-slate-400 line-clamp-2">{generatedContent.applicationSheet.contextualizedSituation}</p>
-                              <div className="flex items-center gap-2">
-                                <div className="px-2 py-1 bg-blue-500/10 rounded text-[9px] font-bold text-blue-400 uppercase">
-                                  {generatedContent.applicationSheet.activities.length} Actividades
-                                </div>
-                                <div className="px-2 py-1 bg-slate-800 rounded text-[9px] font-bold text-slate-500 uppercase">
-                                  Autoevaluación Incluida
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        <div className="space-y-4">
-                          <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Secuencia Didáctica</h4>
-                          <div className="space-y-3">
-                            {['inicio', 'desarrollo', 'cierre'].map((moment) => (
-                              <div key={moment} className="p-4 bg-slate-800/50 border border-slate-700/50 rounded-xl space-y-2">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-6 h-6 rounded bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px] font-bold uppercase">
-                                    {moment[0]}
-                                  </div>
-                                  <span className="text-xs font-bold text-slate-300 uppercase">{moment}</span>
-                                </div>
-                                {generatedContent.didacticSequence[moment]?.map((item: any, idx: number) => (
-                                  <div key={idx} className="space-y-1">
-                                    <p className="text-[10px] font-bold text-emerald-400">{item.process}</p>
-                                    <p className="text-[11px] text-slate-400 line-clamp-3">{item.activities}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="pt-8 mt-auto">
-                        <button 
-                          onClick={downloadWord}
-                          className="w-full bg-white text-slate-900 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-slate-100 transition-all shadow-lg shadow-black/20"
-                        >
-                          <Download size={20} />
-                          Descargar Word (.docx)
-                        </button>
+                        ))}
                       </div>
                     </motion.div>
                   )}
+
+                  <div className="pt-12">
+                    <button 
+                      onClick={generateSession}
+                      disabled={isGenerating}
+                      className={cn(
+                        "w-full py-6 text-xl font-bold flex items-center justify-center gap-4 group rounded-xl transition-all shadow-lg active:scale-95",
+                        mode === 'UNIT' ? "bg-emerald-500 text-black hover:bg-emerald-400 shadow-emerald-500/20" : 
+                        mode === 'BOOKS' ? "bg-blue-500 text-white hover:bg-blue-400 shadow-blue-500/20" : 
+                        mode === 'FREE' ? "bg-purple-500 text-white hover:bg-purple-400 shadow-purple-500/20" : 
+                        "bg-orange-500 text-white hover:bg-orange-400 shadow-orange-500/20"
+                      )}
+                    >
+                      {isGenerating ? (
+                        <>
+                          <Loader2 className="animate-spin w-6 h-6" />
+                          Generando Sesión...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-6 h-6 group-hover:rotate-12 transition-transform" />
+                          Generar Sesión Educativa
+                        </>
+                      )}
+                    </button>
+                    {error && (
+                      <div className="mt-6 p-6 bg-red-500/10 text-red-400 rounded-[32px] flex items-center gap-4 text-sm font-medium border border-red-500/20">
+                        <AlertCircle size={20} />
+                        {error}
+                      </div>
+                    )}
+                    <p className="text-center text-[10px] text-slate-600 mt-6 uppercase tracking-[0.2em]">IA Optimizada para CNEB 2026</p>
+                  </div>
+                </div>
+
+                {/* Preview Section */}
+                <div className="lg:col-span-5">
+                  <div className="sticky top-32 space-y-8">
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-xl font-bold tracking-tight flex items-center gap-3">
+                        <Eye className={cn(
+                          "w-5 h-5",
+                          mode === 'UNIT' ? "text-emerald-400" : 
+                          mode === 'BOOKS' ? "text-blue-400" : 
+                          mode === 'FREE' ? "text-purple-400" : 
+                          "text-orange-400"
+                        )} />
+                        Vista Previa
+                      </h2>
+                      {generatedContent && (
+                        <button 
+                          onClick={downloadWord}
+                          className={cn(
+                            "py-2 px-4 text-xs font-bold rounded-xl border transition-all flex items-center gap-2",
+                            mode === 'UNIT' ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20" : 
+                            mode === 'BOOKS' ? "bg-blue-500/10 text-blue-400 border-blue-500/20 hover:bg-blue-500/20" : 
+                            mode === 'FREE' ? "bg-purple-500/10 text-purple-400 border-purple-500/20 hover:bg-purple-500/20" : 
+                            "bg-orange-500/10 text-orange-400 border-orange-500/20 hover:bg-orange-500/20"
+                          )}
+                        >
+                          <Download size={14} /> Descargar Word
+                        </button>
+                      )}
+                    </div>
+                    
+                    <div className="glass-panel rounded-[40px] p-10 min-h-[600px] border border-white/5 relative overflow-hidden">
+                      <div className={cn(
+                        "absolute top-0 right-0 w-64 h-64 blur-[100px] -mr-32 -mt-32",
+                        mode === 'UNIT' ? "bg-emerald-500/5" : 
+                        mode === 'BOOKS' ? "bg-blue-500/5" : 
+                        mode === 'FREE' ? "bg-purple-500/5" : 
+                        "bg-orange-500/5"
+                      )} />
+                      
+                      {!generatedContent && !isGenerating && (
+                        <div className="h-full flex flex-col items-center justify-center text-center space-y-6 py-20">
+                          <div className="w-20 h-20 rounded-[32px] bg-white/[0.02] border border-white/5 flex items-center justify-center mb-4">
+                            <FileText className="text-slate-700 w-10 h-10" />
+                          </div>
+                          <div>
+                            <h3 className="text-lg font-bold text-slate-400 mb-2">Listo para generar</h3>
+                            <p className="text-sm text-slate-600 max-w-[280px] leading-relaxed">Completa el formulario y presiona el botón para ver tu sesión aquí.</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {isGenerating && (
+                        <div className="h-full flex flex-col items-center justify-center text-center space-y-8 py-20">
+                          <div className="relative">
+                            <div className={cn(
+                              "w-24 h-24 rounded-[32px] border-2 animate-pulse",
+                              mode === 'UNIT' ? "border-emerald-500/20" : 
+                              mode === 'BOOKS' ? "border-blue-500/20" : 
+                              mode === 'FREE' ? "border-purple-500/20" : 
+                              "border-orange-500/20"
+                            )} />
+                            <Loader2 className={cn(
+                              "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 animate-spin",
+                              mode === 'UNIT' ? "text-emerald-400" : 
+                              mode === 'BOOKS' ? "text-blue-400" : 
+                              mode === 'FREE' ? "text-purple-400" : 
+                              "text-orange-400"
+                            )} />
+                          </div>
+                          <div className="space-y-3">
+                            <h3 className={cn(
+                              "text-xl font-bold",
+                              mode === 'UNIT' ? "text-emerald-400" : 
+                              mode === 'BOOKS' ? "text-blue-400" : 
+                              mode === 'FREE' ? "text-purple-400" : 
+                              "text-orange-400"
+                            )}>Creando tu sesión</h3>
+                            <p className="text-sm text-slate-500 animate-pulse">Alineando con lineamientos MINEDU...</p>
+                          </div>
+                        </div>
+                      )}
+                      {generatedContent && (
+                        <motion.div 
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="space-y-8"
+                        >
+                          <div className="space-y-4">
+                            <div className="flex items-center gap-2">
+                              <span className={cn(
+                                "px-3 py-1 text-[10px] font-bold rounded-full border uppercase tracking-widest",
+                                mode === 'UNIT' ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : 
+                                mode === 'BOOKS' ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : 
+                                mode === 'FREE' ? "bg-purple-500/10 text-purple-400 border-purple-500/20" : 
+                                "bg-orange-500/10 text-orange-400 border-orange-500/20"
+                              )}>Documento Generado</span>
+                            </div>
+                            <h3 className="text-3xl font-bold leading-tight tracking-tight">{generatedContent.sessionTitle}</h3>
+                            <p className="text-slate-500 text-sm leading-relaxed italic">"{generatedContent.purpose.summary}"</p>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-6">
+                            <div className="p-6 rounded-3xl bg-white/[0.02] border border-white/5">
+                              <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-2">Competencia</p>
+                              <p className="text-sm font-bold text-slate-300 line-clamp-2">{generatedContent.learningTable?.[0]?.competency || 'General'}</p>
+                            </div>
+                            <div className="p-6 rounded-3xl bg-white/[0.02] border border-white/5">
+                              <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-2">Duración</p>
+                              <p className="text-sm font-bold text-slate-300">{data.duration} min</p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-4">
+                            <h4 className="text-sm font-bold uppercase tracking-widest flex items-center gap-2">
+                              <CheckCircle2 size={14} className={cn(
+                                mode === 'UNIT' ? "text-emerald-400" : 
+                                mode === 'BOOKS' ? "text-blue-400" : 
+                                mode === 'FREE' ? "text-purple-400" : 
+                                "text-orange-400"
+                              )} />
+                              Evidencia de Aprendizaje
+                            </h4>
+                            <div className={cn(
+                              "p-6 rounded-3xl border",
+                              mode === 'UNIT' ? "bg-emerald-500/5 border-emerald-500/10" : 
+                              mode === 'BOOKS' ? "bg-blue-500/5 border-blue-500/10" : 
+                              mode === 'FREE' ? "bg-purple-500/5 border-purple-500/10" : 
+                              "bg-orange-500/5 border-orange-500/10"
+                            )}>
+                              <p className="text-sm text-slate-300 leading-relaxed italic">"{generatedContent.learningTable?.[0]?.evidence || "No especificada"}"</p>
+                            </div>
+                          </div>
+
+                          {generatedContent.learningGuide && (
+                            <div className="space-y-4">
+                              <h4 className="text-sm font-bold uppercase tracking-widest flex items-center gap-2">
+                                <Plus size={14} className={cn(
+                                  mode === 'UNIT' ? "text-emerald-400" : 
+                                  mode === 'BOOKS' ? "text-blue-400" : 
+                                  mode === 'FREE' ? "text-purple-400" : 
+                                  "text-orange-400"
+                                )} />
+                                Guía de Actividades
+                              </h4>
+                              <div className="p-6 rounded-3xl bg-white/[0.02] border border-white/5">
+                                <p className={cn(
+                                  "text-sm font-bold mb-2",
+                                  mode === 'UNIT' ? "text-emerald-400" : 
+                                  mode === 'BOOKS' ? "text-blue-400" : 
+                                  mode === 'FREE' ? "text-purple-400" : 
+                                  "text-orange-400"
+                                )}>{generatedContent.learningGuide.title}</p>
+                                <p className="text-xs text-slate-500 line-clamp-3">{generatedContent.learningGuide.introduction}</p>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="pt-6 border-t border-white/5">
+                            <button 
+                              onClick={downloadWord}
+                              className={cn(
+                                "w-full py-4 flex items-center justify-center gap-3 rounded-xl font-bold transition-all shadow-lg active:scale-95",
+                                mode === 'UNIT' ? "bg-emerald-500 text-black hover:bg-emerald-400 shadow-emerald-500/20" : 
+                                mode === 'BOOKS' ? "bg-blue-500 text-white hover:bg-blue-400 shadow-blue-500/20" : 
+                                mode === 'FREE' ? "bg-purple-500 text-white hover:bg-purple-400 shadow-purple-500/20" : 
+                                "bg-orange-500 text-white hover:bg-orange-400 shadow-orange-500/20"
+                              )}
+                            >
+                              <Download size={20} />
+                              Descargar Planificación Completa
+                            </button>
+                          </div>
+                        </motion.div>
+                      )}
+                    </div>
+
+                    {/* Tips */}
+                    <div className="mt-8 grid grid-cols-2 gap-4">
+                      <div className={cn(
+                        "p-4 rounded-2xl border",
+                        mode === 'UNIT' ? "bg-emerald-500/5 border-emerald-500/10" : 
+                        mode === 'BOOKS' ? "bg-blue-500/5 border-blue-500/10" : 
+                        mode === 'FREE' ? "bg-purple-500/5 border-purple-500/10" : 
+                        "bg-orange-500/5 border-orange-500/10"
+                      )}>
+                        <Sparkles className={cn(
+                          "mb-2",
+                          mode === 'UNIT' ? "text-emerald-400" : 
+                          mode === 'BOOKS' ? "text-blue-400" : 
+                          mode === 'FREE' ? "text-purple-400" : 
+                          "text-orange-400"
+                        )} size={18} />
+                        <p className={cn(
+                          "text-[10px] font-bold uppercase tracking-wider",
+                          mode === 'UNIT' ? "text-emerald-400" : 
+                          mode === 'BOOKS' ? "text-blue-400" : 
+                          mode === 'FREE' ? "text-purple-400" : 
+                          "text-orange-400"
+                        )}>IA Optimizada</p>
+                        <p className="text-[10px] text-slate-500 mt-1">Generación basada en el CNEB 2026.</p>
+                      </div>
+                      <div className="p-4 bg-blue-500/5 rounded-2xl border border-blue-500/10">
+                        <Target className="text-blue-400 mb-2" size={18} />
+                        <p className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">Enfoque DUA</p>
+                        <p className="text-[10px] text-slate-500 mt-1">Adaptaciones curriculares automáticas.</p>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
+            </main>
 
-              {/* Tips */}
-              <div className="mt-8 grid grid-cols-2 gap-4">
-                <div className="p-4 bg-emerald-500/5 rounded-2xl border border-emerald-500/10">
-                  <Sparkles className="text-emerald-400 mb-2" size={18} />
-                  <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">IA Optimizada</p>
-                  <p className="text-[10px] text-slate-500 mt-1">Generación basada en el CNEB 2026.</p>
+            <footer className={cn(
+              "max-w-5xl mx-auto px-6 py-12 border-t transition-colors duration-500",
+              theme === 'dark' ? "border-slate-800" : "border-slate-200"
+            )}>
+              <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+                <div className={cn(
+                  "flex items-center gap-2 transition-all",
+                  theme === 'dark' ? "opacity-30 grayscale invert" : "opacity-50"
+                )}>
+                  <div className={cn(
+                    "w-6 h-6 rounded flex items-center justify-center",
+                    theme === 'dark' ? "bg-white" : "bg-slate-900"
+                  )}>
+                    <GraduationCap className={cn(
+                      "w-4 h-4",
+                      theme === 'dark' ? "text-slate-900" : "text-white"
+                    )} />
+                  </div>
+                  <span className={cn(
+                    "text-sm font-bold tracking-tight",
+                    theme === 'dark' ? "text-white" : "text-slate-900"
+                  )}>EduGen</span>
                 </div>
-                <div className="p-4 bg-blue-500/5 rounded-2xl border border-blue-500/10">
-                  <Target className="text-blue-400 mb-2" size={18} />
-                  <p className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">Enfoque DUA</p>
-                  <p className="text-[10px] text-slate-500 mt-1">Adaptaciones curriculares automáticas.</p>
+                <p className="text-xs text-slate-500 font-medium">© 2026 Juan Caicedo • Potenciado por Google Gemini</p>
+                <div className="flex items-center gap-4">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Servidor Activo</span>
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
-      </main>
-
-      <footer className="max-w-5xl mx-auto px-6 py-12 border-t border-slate-800">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="flex items-center gap-2 opacity-30 grayscale invert">
-            <div className="w-6 h-6 bg-white rounded flex items-center justify-center">
-              <GraduationCap className="text-slate-900 w-4 h-4" />
-            </div>
-            <span className="text-sm font-bold tracking-tight text-white">EduGen</span>
-          </div>
-          <p className="text-xs text-slate-500 font-medium">© 2026 Juan Caicedo • Potenciado por Google Gemini</p>
-          <div className="flex items-center gap-4">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Servidor Activo</span>
-          </div>
-        </div>
-      </footer>
-    </motion.div>
-  )}
-</AnimatePresence>
-</div>
-);
+            </footer>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
 }

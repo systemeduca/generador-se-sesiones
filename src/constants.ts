@@ -143,7 +143,7 @@ export const CONDICIONES_NEE = [
   "Dislexia",
   "Trastorno del lenguaje",
   "Dificultades de aprendizaje",
-  "Otro (especificar)"
+  "Escribir (personalizado)"
 ];
 
 export const ACTIVIDADES_NEE = [
@@ -155,7 +155,7 @@ export const ACTIVIDADES_NEE = [
   "Agrupación con compañeros de apoyo",
   "Rutinas visuales y anticipación",
   "Manipulativos y juegos didácticos",
-  "Otro (especificar)"
+  "Escribir (personalizado)"
 ];
 
 export const INSTRUMENTOS_EVALUACION = [
